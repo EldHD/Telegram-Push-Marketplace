@@ -17,6 +17,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
+from .db import Base, engine, ensure_bot_owner_email_column, get_db
 from .db import Base, engine, get_db
 from .models import (
     Audience,
@@ -35,6 +36,11 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "dev-secret"))
+
+
+@app.on_event("startup")
+def ensure_schema_on_startup() -> None:
+    ensure_bot_owner_email_column()
 
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
@@ -161,6 +167,9 @@ async def auth_callback(request: Request, db: Session = Depends(get_db)):
     user = token.get("userinfo")
     if not user:
         raise HTTPException(status_code=400, detail="Unable to fetch user info")
+    email = user.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="Google did not return an email address")
     email = user.get("email", "")
     if not gmail_only(email):
         raise HTTPException(status_code=403, detail="Only Gmail accounts are allowed")
