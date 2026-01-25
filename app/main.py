@@ -32,10 +32,14 @@ from .utils.locale import is_valid_locale, normalize_locale
 from .utils.security import encrypt_token
 
 Base.metadata.create_all(bind=engine)
-ensure_bot_owner_email_column()
 
 app = FastAPI()
 app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "dev-secret"))
+
+
+@app.on_event("startup")
+def ensure_schema_on_startup() -> None:
+    ensure_bot_owner_email_column()
 
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
