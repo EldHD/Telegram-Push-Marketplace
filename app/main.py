@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
 from .db import Base, engine, ensure_bot_owner_email_column, get_db
+from .db import Base, engine, get_db
 from .models import (
     Audience,
     Bot,
@@ -169,6 +170,7 @@ async def auth_callback(request: Request, db: Session = Depends(get_db)):
     email = user.get("email")
     if not email:
         raise HTTPException(status_code=400, detail="Google did not return an email address")
+    email = user.get("email", "")
     if not gmail_only(email):
         raise HTTPException(status_code=403, detail="Only Gmail accounts are allowed")
     get_owner(db, email)
