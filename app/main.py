@@ -14,6 +14,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Upload
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -30,6 +31,7 @@ from .models import (
 )
 from .tasks.verification import start_verification
 from .utils.locale import is_valid_locale, normalize_locale
+from .utils.security import decrypt_token, encrypt_token
 from .utils.security import encrypt_token
 
 Base.metadata.create_all(bind=engine)
@@ -51,6 +53,7 @@ GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
 OAUTH_REDIRECT_URL = os.getenv("OAUTH_REDIRECT_URL", "http://localhost:8000/auth/callback")
 
 TEST_PUSH_RATE_LIMIT_SECONDS = 5
+TOKEN_RE = re.compile(r"^\d{6,12}:[A-Za-z0-9_-]{30,60}$")
 
 
 oauth = OAuth()
@@ -89,6 +92,41 @@ def validate_bot_username(username: str) -> bool:
     return bool(re.match(r"^@[a-z0-9_]{5,64}bot$", username.lower()))
 
 
+def _normalize_username(username: str) -> str:
+    return username.strip().lstrip("@").lower()
+
+
+def validate_telegram_token(bot_username: str, token: str) -> Dict:
+    if not TOKEN_RE.match(token):
+        raise HTTPException(status_code=400, detail="Invalid Telegram token format")
+    try:
+        resp = requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=10)
+    except requests.RequestException:
+        raise HTTPException(status_code=400, detail="Invalid Telegram token")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=400, detail="Invalid Telegram token")
+    try:
+        data = resp.json()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid Telegram token")
+    if not data.get("ok"):
+        raise HTTPException(status_code=400, detail="Invalid Telegram token")
+    result = data.get("result", {})
+    real_username = _normalize_username(result.get("username", ""))
+    if not real_username:
+        raise HTTPException(status_code=400, detail="Invalid Telegram token")
+    entered_username = _normalize_username(bot_username)
+    if real_username != entered_username:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Token belongs to @{real_username}, not @{entered_username}",
+        )
+    return {"username": real_username, "id": result.get("id")}
+
+
+class BotValidationRequest(BaseModel):
+    bot_username: str
+    token: str
 def telegram_get_me(token: str) -> Dict:
     resp = requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=10)
     data = resp.json()
@@ -184,6 +222,16 @@ async def logout(request: Request):
     return RedirectResponse("/login")
 
 
+@app.post("/api/bots/validate")
+async def validate_bot_token(request: Request, payload: BotValidationRequest):
+    require_login(request)
+    if not validate_bot_username(payload.bot_username):
+        raise HTTPException(status_code=400, detail="Invalid bot username format")
+    validate_telegram_token(payload.bot_username, payload.token)
+    normalized = _normalize_username(payload.bot_username)
+    return {"status": "ok", "username": f"@{normalized}"}
+
+
 @app.get("/bot-owner", response_class=HTMLResponse)
 async def bot_owner_portal(request: Request, db: Session = Depends(get_db)):
     email = require_login(request)
@@ -259,6 +307,9 @@ async def create_bot(
             status_code=400,
         )
     try:
+        validate_telegram_token(username, token)
+    except HTTPException as exc:
+        errors["token"] = exc.detail
         data = telegram_get_me(token)
     except ValueError as exc:
         errors["token"] = str(exc)
@@ -273,6 +324,10 @@ async def create_bot(
             },
             status_code=400,
         )
+    try:
+        encrypted_token = encrypt_token(token)
+    except RuntimeError:
+        raise HTTPException(status_code=500, detail="Encryption configuration error")
     api_username = data.get("result", {}).get("username", "")
     if api_username.lower() != username.lstrip("@").lower():
         errors["username"] = "Provided username does not match Telegram's getMe response."
@@ -467,6 +522,10 @@ async def test_push(
     )
     if not audience:
         raise HTTPException(status_code=400, detail="tg_id is not verified for this bot")
+    try:
+        token = decrypt_token(bot.token_encrypted)
+    except RuntimeError:
+        raise HTTPException(status_code=500, detail="Encryption configuration error")
     from .utils.security import decrypt_token
 
     token = decrypt_token(bot.token_encrypted)

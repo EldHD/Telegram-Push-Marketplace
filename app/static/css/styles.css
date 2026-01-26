@@ -78,6 +78,12 @@ input, textarea {
   display: inline-block;
 }
 
+.button.secondary {
+  background: #eef2ff;
+  color: var(--primary);
+  border: 1px solid var(--border);
+}
+
 .form-actions {
   margin-top: 8px;
 }
@@ -89,6 +95,18 @@ input, textarea {
 .helper {
   color: var(--muted);
   font-size: 12px;
+}
+
+.validation-status {
+  font-size: 12px;
+}
+
+.validation-status.success {
+  color: var(--success-text);
+}
+
+.validation-status.error {
+  color: #d93025;
 }
 
 .error {

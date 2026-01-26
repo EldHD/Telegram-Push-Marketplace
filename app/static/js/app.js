@@ -47,3 +47,79 @@ function initPricingToggles() {
 }
 
 window.addEventListener('load', initPricingToggles);
+
+function initBotTokenValidation() {
+  const usernameInput = document.getElementById('bot-username');
+  const tokenInput = document.getElementById('bot-token');
+  const saveButton = document.getElementById('save-bot-button');
+  const validateButton = document.getElementById('validate-bot-token');
+  const status = document.getElementById('token-validation-status');
+  const form = document.querySelector('form[action=\"/bot-owner/bots\"]');
+  if (!usernameInput || !tokenInput || !saveButton || !validateButton || !status || !form) {
+    return;
+  }
+
+  let isValid = false;
+  let isPending = false;
+
+  const setStatus = (message, type) => {
+    status.textContent = message;
+    status.classList.remove('success', 'error');
+    if (type) status.classList.add(type);
+  };
+
+  const resetValidation = () => {
+    isValid = false;
+    isPending = false;
+    saveButton.disabled = true;
+    setStatus('', null);
+  };
+
+  const validateToken = async () => {
+    const botUsername = usernameInput.value.trim();
+    const token = tokenInput.value.trim();
+    if (!botUsername || !token) {
+      resetValidation();
+      return;
+    }
+    isPending = true;
+    saveButton.disabled = true;
+    setStatus('Validating token...', null);
+    try {
+      const response = await fetch('/api/bots/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bot_username: botUsername, token }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || 'Validation failed');
+      }
+      isValid = true;
+      setStatus(`Confirmed: this token belongs to ${data.username}`, 'success');
+      saveButton.disabled = false;
+    } catch (error) {
+      isValid = false;
+      setStatus(error.message, 'error');
+      saveButton.disabled = true;
+    } finally {
+      isPending = false;
+    }
+  };
+
+  usernameInput.addEventListener('input', resetValidation);
+  tokenInput.addEventListener('input', resetValidation);
+  tokenInput.addEventListener('blur', validateToken);
+  validateButton.addEventListener('click', validateToken);
+
+  form.addEventListener('submit', (event) => {
+    if (!isValid || isPending) {
+      event.preventDefault();
+      if (!isPending) {
+        setStatus('Please validate the token before saving.', 'error');
+      }
+    }
+  });
+}
+
+window.addEventListener('load', initBotTokenValidation);

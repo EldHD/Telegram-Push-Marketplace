@@ -11,6 +11,7 @@
   <form method="post" action="/bot-owner/bots" class="form-grid">
     <label>
       Bot username <span class="required">*</span>
+      <input type="text" name="username" id="bot-username" placeholder="@mycoolbot" required>
       <input type="text" name="username" placeholder="@mycoolbot" required>
       <small class="helper">Use the bot username in Telegram. Must end with “bot”.</small>
       {% if errors and errors.get('username') %}
@@ -19,6 +20,9 @@
     </label>
     <label>
       Bot token <span class="required">*</span>
+      <input type="password" name="token" id="bot-token" placeholder="123456:ABC..." required>
+      <small class="helper">We validate the token using Telegram getMe.</small>
+      <div class="validation-status" id="token-validation-status"></div>
       <input type="password" name="token" placeholder="123456:ABC..." required>
       <small class="helper">We validate the token using Telegram getMe.</small>
       {% if errors and errors.get('token') %}
@@ -34,6 +38,8 @@
       {% endif %}
     </label>
     <div class="form-actions">
+      <button class="button secondary" type="button" id="validate-bot-token">Validate token</button>
+      <button class="button" type="submit" id="save-bot-button" disabled>Save bot</button>
       <button class="button" type="submit">Save bot</button>
     </div>
   </form>
