@@ -55,6 +55,7 @@ function initBotTokenValidation() {
   const validateButton = document.getElementById('validate-bot-token');
   const status = document.getElementById('token-validation-status');
   const form = document.querySelector('form[action=\"/bot-owner/bots\"]');
+  const validatedField = document.getElementById('token-validated');
   if (!usernameInput || !tokenInput || !saveButton || !validateButton || !status || !form) {
     return;
   }
@@ -72,43 +73,79 @@ function initBotTokenValidation() {
     isValid = false;
     isPending = false;
     saveButton.disabled = true;
+    if (validatedField) validatedField.value = 'false';
     setStatus('', null);
+  };
+
+  const tokenRegex = /^\d{6,12}:[A-Za-z0-9_-]{20,}$/;
+  const usernameRegex = /^@?[a-z0-9_]{5,64}bot$/i;
+
+  const validateFormat = () => {
+    const botUsername = usernameInput.value.trim();
+    const token = tokenInput.value.trim();
+    if (!botUsername || !token) {
+      resetValidation();
+      return false;
+    }
+    if (!usernameRegex.test(botUsername)) {
+      resetValidation();
+      setStatus('❌ Username must end with "bot".', 'error');
+      return false;
+    }
+    if (!tokenRegex.test(token)) {
+      resetValidation();
+      setStatus('❌ Invalid token format.', 'error');
+      return false;
+    }
+    return true;
   };
 
   const validateToken = async () => {
     const botUsername = usernameInput.value.trim();
     const token = tokenInput.value.trim();
-    if (!botUsername || !token) {
-      resetValidation();
-      return;
-    }
+    if (!validateFormat()) return;
     isPending = true;
     saveButton.disabled = true;
     setStatus('Validating token...', null);
     try {
-      const response = await fetch('/api/bots/validate', {
+      const response = await fetch('/api/bots/validate-token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bot_username: botUsername, token }),
+        body: JSON.stringify({ username: botUsername, token }),
       });
       const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || 'Validation failed');
+      if (!response.ok || !data.ok) {
+        if (data.reason === 'username_mismatch' && data.actual_username) {
+          const entered = botUsername.replace('@', '');
+          throw new Error(`Token belongs to @${data.actual_username}, not @${entered}`);
+        }
+        if (data.reason === 'invalid_format') {
+          throw new Error('Invalid token format');
+        }
+        throw new Error('Invalid token');
       }
       isValid = true;
-      setStatus(`Confirmed: this token belongs to ${data.username}`, 'success');
+      const namePart = data.bot_name ? `, name=${data.bot_name}` : '';
+      setStatus(`✅ This token belongs to ${data.bot_username} (id ${data.bot_id}${namePart})`, 'success');
+      if (validatedField) validatedField.value = 'true';
       saveButton.disabled = false;
     } catch (error) {
       isValid = false;
-      setStatus(error.message, 'error');
+      setStatus(`❌ ${error.message}`, 'error');
       saveButton.disabled = true;
     } finally {
       isPending = false;
     }
   };
 
-  usernameInput.addEventListener('input', resetValidation);
-  tokenInput.addEventListener('input', resetValidation);
+  usernameInput.addEventListener('input', () => {
+    resetValidation();
+    validateFormat();
+  });
+  tokenInput.addEventListener('input', () => {
+    resetValidation();
+    validateFormat();
+  });
   tokenInput.addEventListener('blur', validateToken);
   validateButton.addEventListener('click', validateToken);
 

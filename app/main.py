@@ -19,7 +19,6 @@ from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
 from .db import Base, engine, ensure_bot_owner_email_column, get_db
-from .db import Base, engine, get_db
 from .models import (
     Audience,
     Bot,
@@ -31,8 +30,7 @@ from .models import (
 )
 from .tasks.verification import start_verification
 from .utils.locale import is_valid_locale, normalize_locale
-from .utils.security import decrypt_token, encrypt_token
-from .utils.security import encrypt_token
+from .utils.security import decrypt_token, encrypt_token, ensure_fernet_key_config
 
 Base.metadata.create_all(bind=engine)
 
@@ -43,6 +41,7 @@ app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "de
 @app.on_event("startup")
 def ensure_schema_on_startup() -> None:
     ensure_bot_owner_email_column()
+    ensure_fernet_key_config()
 
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
@@ -53,7 +52,7 @@ GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
 OAUTH_REDIRECT_URL = os.getenv("OAUTH_REDIRECT_URL", "http://localhost:8000/auth/callback")
 
 TEST_PUSH_RATE_LIMIT_SECONDS = 5
-TOKEN_RE = re.compile(r"^\d{6,12}:[A-Za-z0-9_-]{30,60}$")
+TOKEN_RE = re.compile(r"^\d{6,12}:[A-Za-z0-9_-]{20,}$")
 
 
 oauth = OAuth()
@@ -89,7 +88,7 @@ def get_owner(db: Session, email: str) -> BotOwner:
 
 
 def validate_bot_username(username: str) -> bool:
-    return bool(re.match(r"^@[a-z0-9_]{5,64}bot$", username.lower()))
+    return bool(re.match(r"^@?[a-z0-9_]{5,64}bot$", username.lower()))
 
 
 def _normalize_username(username: str) -> str:
@@ -97,42 +96,44 @@ def _normalize_username(username: str) -> str:
 
 
 def validate_telegram_token(bot_username: str, token: str) -> Dict:
+    token = token.strip()
     if not TOKEN_RE.match(token):
-        raise HTTPException(status_code=400, detail="Invalid Telegram token format")
+        return {"ok": False, "reason": "invalid_format"}
     try:
         resp = requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=10)
     except requests.RequestException:
-        raise HTTPException(status_code=400, detail="Invalid Telegram token")
+        return {"ok": False, "reason": "invalid_token"}
     if resp.status_code != 200:
-        raise HTTPException(status_code=400, detail="Invalid Telegram token")
+        return {"ok": False, "reason": "invalid_token"}
     try:
         data = resp.json()
     except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid Telegram token")
+        return {"ok": False, "reason": "invalid_token"}
     if not data.get("ok"):
-        raise HTTPException(status_code=400, detail="Invalid Telegram token")
+        return {"ok": False, "reason": "invalid_token"}
     result = data.get("result", {})
     real_username = _normalize_username(result.get("username", ""))
     if not real_username:
-        raise HTTPException(status_code=400, detail="Invalid Telegram token")
+        return {"ok": False, "reason": "invalid_token"}
     entered_username = _normalize_username(bot_username)
     if real_username != entered_username:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Token belongs to @{real_username}, not @{entered_username}",
-        )
-    return {"username": real_username, "id": result.get("id")}
+        return {
+            "ok": False,
+            "reason": "username_mismatch",
+            "actual_username": real_username,
+            "bot_id": result.get("id"),
+        }
+    return {
+        "ok": True,
+        "username": real_username,
+        "id": result.get("id"),
+        "name": result.get("first_name") or result.get("name") or "",
+    }
 
 
 class BotValidationRequest(BaseModel):
-    bot_username: str
+    username: str
     token: str
-def telegram_get_me(token: str) -> Dict:
-    resp = requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=10)
-    data = resp.json()
-    if not data.get("ok"):
-        raise ValueError(data.get("description", "Unable to validate bot token"))
-    return data
 
 
 def build_error_report(errors: List[Tuple[int, str, str, str]]) -> bytes:
@@ -208,7 +209,6 @@ async def auth_callback(request: Request, db: Session = Depends(get_db)):
     email = user.get("email")
     if not email:
         raise HTTPException(status_code=400, detail="Google did not return an email address")
-    email = user.get("email", "")
     if not gmail_only(email):
         raise HTTPException(status_code=403, detail="Only Gmail accounts are allowed")
     get_owner(db, email)
@@ -222,14 +222,22 @@ async def logout(request: Request):
     return RedirectResponse("/login")
 
 
-@app.post("/api/bots/validate")
+@app.post("/api/bots/validate-token")
 async def validate_bot_token(request: Request, payload: BotValidationRequest):
     require_login(request)
-    if not validate_bot_username(payload.bot_username):
-        raise HTTPException(status_code=400, detail="Invalid bot username format")
-    validate_telegram_token(payload.bot_username, payload.token)
-    normalized = _normalize_username(payload.bot_username)
-    return {"status": "ok", "username": f"@{normalized}"}
+    username = payload.username.strip()
+    token = payload.token.strip()
+    if not validate_bot_username(username):
+        return {"ok": False, "reason": "invalid_username"}
+    data = validate_telegram_token(username, token)
+    if not data.get("ok"):
+        return data
+    return {
+        "ok": True,
+        "bot_username": f"@{data['username']}",
+        "bot_id": data["id"],
+        "bot_name": data["name"],
+    }
 
 
 @app.get("/bot-owner", response_class=HTMLResponse)
@@ -286,6 +294,7 @@ async def create_bot(
     username: str = Form(...),
     token: str = Form(...),
     max_pushes_per_user_per_day: int = Form(1),
+    token_validated: str = Form("false"),
 ):
     email = require_login(request)
     owner = db.query(BotOwner).filter_by(email=email).first()
@@ -306,13 +315,17 @@ async def create_bot(
             },
             status_code=400,
         )
-    try:
-        validate_telegram_token(username, token)
-    except HTTPException as exc:
-        errors["token"] = exc.detail
-        data = telegram_get_me(token)
-    except ValueError as exc:
-        errors["token"] = str(exc)
+    normalized_username = f"@{_normalize_username(username)}"
+    validation = validate_telegram_token(username, token)
+    if token_validated.lower() != "true":
+        errors["token"] = "Please validate the token before saving."
+    elif not validation.get("ok"):
+        if validation.get("reason") == "username_mismatch":
+            actual = validation.get("actual_username", "unknown")
+            errors["token"] = f"Token belongs to @{actual}, not {normalized_username}"
+        else:
+            errors["token"] = "Invalid Telegram token"
+    if errors:
         return templates.TemplateResponse(
             "bot_owner.html",
             {
@@ -328,25 +341,9 @@ async def create_bot(
         encrypted_token = encrypt_token(token)
     except RuntimeError:
         raise HTTPException(status_code=500, detail="Encryption configuration error")
-    api_username = data.get("result", {}).get("username", "")
-    if api_username.lower() != username.lstrip("@").lower():
-        errors["username"] = "Provided username does not match Telegram's getMe response."
-    if errors:
-        return templates.TemplateResponse(
-            "bot_owner.html",
-            {
-                "request": request,
-                "owner": owner,
-                "bots": db.query(Bot).filter_by(owner_id=owner.id).all(),
-                "selected_bot": None,
-                "errors": errors,
-            },
-            status_code=400,
-        )
-    encrypted_token = encrypt_token(token)
     bot = Bot(
         owner_id=owner.id,
-        username=username.lower(),
+        username=normalized_username,
         token_encrypted=encrypted_token,
         max_pushes_per_user_per_day=max_pushes_per_user_per_day,
     )
@@ -526,9 +523,6 @@ async def test_push(
         token = decrypt_token(bot.token_encrypted)
     except RuntimeError:
         raise HTTPException(status_code=500, detail="Encryption configuration error")
-    from .utils.security import decrypt_token
-
-    token = decrypt_token(bot.token_encrypted)
     resp = requests.post(
         f"https://api.telegram.org/bot{token}/sendMessage",
         data={"chat_id": tg_id, "text": message, "parse_mode": "HTML"},

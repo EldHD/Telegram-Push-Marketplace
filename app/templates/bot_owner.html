@@ -12,7 +12,6 @@
     <label>
       Bot username <span class="required">*</span>
       <input type="text" name="username" id="bot-username" placeholder="@mycoolbot" required>
-      <input type="text" name="username" placeholder="@mycoolbot" required>
       <small class="helper">Use the bot username in Telegram. Must end with “bot”.</small>
       {% if errors and errors.get('username') %}
         <span class="error">{{ errors.get('username') }}</span>
@@ -23,8 +22,6 @@
       <input type="password" name="token" id="bot-token" placeholder="123456:ABC..." required>
       <small class="helper">We validate the token using Telegram getMe.</small>
       <div class="validation-status" id="token-validation-status"></div>
-      <input type="password" name="token" placeholder="123456:ABC..." required>
-      <small class="helper">We validate the token using Telegram getMe.</small>
       {% if errors and errors.get('token') %}
         <span class="error">{{ errors.get('token') }}</span>
       {% endif %}
@@ -37,10 +34,10 @@
         <span class="error">{{ errors.get('max_pushes_per_user_per_day') }}</span>
       {% endif %}
     </label>
+    <input type="hidden" name="token_validated" id="token-validated" value="false">
     <div class="form-actions">
       <button class="button secondary" type="button" id="validate-bot-token">Validate token</button>
       <button class="button" type="submit" id="save-bot-button" disabled>Save bot</button>
-      <button class="button" type="submit">Save bot</button>
     </div>
   </form>
 </section>
