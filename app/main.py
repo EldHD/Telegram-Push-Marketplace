@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
 from .db import Base, engine, ensure_bot_owner_email_column, get_db
+from .db import Base, engine, get_db
 from .models import (
     Audience,
     Bot,
@@ -31,6 +32,7 @@ from .models import (
 from .tasks.verification import start_verification
 from .utils.locale import is_valid_locale, normalize_locale
 from .utils.security import decrypt_token, encrypt_token
+from .utils.security import encrypt_token
 
 Base.metadata.create_all(bind=engine)
 
@@ -125,6 +127,12 @@ def validate_telegram_token(bot_username: str, token: str) -> Dict:
 class BotValidationRequest(BaseModel):
     bot_username: str
     token: str
+def telegram_get_me(token: str) -> Dict:
+    resp = requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=10)
+    data = resp.json()
+    if not data.get("ok"):
+        raise ValueError(data.get("description", "Unable to validate bot token"))
+    return data
 
 
 def build_error_report(errors: List[Tuple[int, str, str, str]]) -> bytes:
@@ -200,6 +208,7 @@ async def auth_callback(request: Request, db: Session = Depends(get_db)):
     email = user.get("email")
     if not email:
         raise HTTPException(status_code=400, detail="Google did not return an email address")
+    email = user.get("email", "")
     if not gmail_only(email):
         raise HTTPException(status_code=403, detail="Only Gmail accounts are allowed")
     get_owner(db, email)
@@ -301,6 +310,9 @@ async def create_bot(
         validate_telegram_token(username, token)
     except HTTPException as exc:
         errors["token"] = exc.detail
+        data = telegram_get_me(token)
+    except ValueError as exc:
+        errors["token"] = str(exc)
         return templates.TemplateResponse(
             "bot_owner.html",
             {
@@ -316,6 +328,22 @@ async def create_bot(
         encrypted_token = encrypt_token(token)
     except RuntimeError:
         raise HTTPException(status_code=500, detail="Encryption configuration error")
+    api_username = data.get("result", {}).get("username", "")
+    if api_username.lower() != username.lstrip("@").lower():
+        errors["username"] = "Provided username does not match Telegram's getMe response."
+    if errors:
+        return templates.TemplateResponse(
+            "bot_owner.html",
+            {
+                "request": request,
+                "owner": owner,
+                "bots": db.query(Bot).filter_by(owner_id=owner.id).all(),
+                "selected_bot": None,
+                "errors": errors,
+            },
+            status_code=400,
+        )
+    encrypted_token = encrypt_token(token)
     bot = Bot(
         owner_id=owner.id,
         username=username.lower(),
@@ -498,6 +526,9 @@ async def test_push(
         token = decrypt_token(bot.token_encrypted)
     except RuntimeError:
         raise HTTPException(status_code=500, detail="Encryption configuration error")
+    from .utils.security import decrypt_token
+
+    token = decrypt_token(bot.token_encrypted)
     resp = requests.post(
         f"https://api.telegram.org/bot{token}/sendMessage",
         data={"chat_id": tg_id, "text": message, "parse_mode": "HTML"},
