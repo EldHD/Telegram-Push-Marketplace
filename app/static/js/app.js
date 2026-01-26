@@ -87,6 +87,7 @@ function initBotTokenValidation() {
     setStatus('Validating token...', null);
     try {
       const response = await fetch('/bot-owner/validate-token', {
+      const response = await fetch('/api/bots/validate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ bot_username: botUsername, token }),
@@ -102,6 +103,15 @@ function initBotTokenValidation() {
     } catch (error) {
       isValid = false;
       setStatus(`❌ ${error.message}`, 'error');
+      if (!response.ok) {
+        throw new Error(data.detail || 'Validation failed');
+      }
+      isValid = true;
+      setStatus(`Confirmed: this token belongs to ${data.username}`, 'success');
+      saveButton.disabled = false;
+    } catch (error) {
+      isValid = false;
+      setStatus(error.message, 'error');
       saveButton.disabled = true;
     } finally {
       isPending = false;

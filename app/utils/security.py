@@ -31,6 +31,15 @@ def get_fernet() -> Fernet:
     logger.warning("FERNET_KEY missing or invalid; using temporary key for development.")
     _FERNET = Fernet(temp_key)
     return _FERNET
+import os
+from cryptography.fernet import Fernet
+
+
+def get_fernet() -> Fernet:
+    key = os.getenv("FERNET_KEY")
+    if not key:
+        raise RuntimeError("FERNET_KEY is required")
+    return Fernet(key.encode())
 
 
 def encrypt_token(token: str) -> str:
