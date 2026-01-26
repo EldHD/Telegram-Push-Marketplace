@@ -1,0 +1,230 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-title">
+  <h1>Bot Owner Portal</h1>
+  <p class="muted">Onboard your Telegram bot, verify your audience, and set pricing.</p>
+</div>
+
+<section class="card">
+  <h2>Step 1 — Connect Bot</h2>
+  <form method="post" action="/bot-owner/bots" class="form-grid">
+    <label>
+      Bot username <span class="required">*</span>
+      <input type="text" name="username" id="bot-username" placeholder="@mycoolbot" required>
+      <small class="helper">Use the bot username in Telegram. Must end with “bot”.</small>
+      {% if errors and errors.get('username') %}
+        <span class="error">{{ errors.get('username') }}</span>
+      {% endif %}
+    </label>
+    <label>
+      Bot token <span class="required">*</span>
+      <input type="password" name="token" id="bot-token" placeholder="123456:ABC..." required>
+      <small class="helper">We validate the token using Telegram getMe.</small>
+      <div class="validation-status" id="token-validation-status"></div>
+      {% if errors and errors.get('token') %}
+        <span class="error">{{ errors.get('token') }}</span>
+      {% endif %}
+    </label>
+    <label>
+      Max pushes per user per day <span class="required">*</span>
+      <input type="number" name="max_pushes_per_user_per_day" min="1" value="1" required>
+      <small class="helper">Protects your audience from spam.</small>
+      {% if errors and errors.get('max_pushes_per_user_per_day') %}
+        <span class="error">{{ errors.get('max_pushes_per_user_per_day') }}</span>
+      {% endif %}
+    </label>
+    <div class="form-actions">
+      <button class="button secondary" type="button" id="validate-bot-token">Validate token</button>
+      <button class="button" type="submit" id="save-bot-button" disabled>Save bot</button>
+    </div>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Bots</h2>
+  {% if bots %}
+    <div class="bot-list">
+      {% for bot in bots %}
+        <a class="bot-item {% if selected_bot and bot.id == selected_bot.id %}active{% endif %}" href="/bot-owner?bot_id={{ bot.id }}">
+          <div>
+            <strong>{{ bot.username }}</strong>
+            <div class="muted">Max pushes/day: {{ bot.max_pushes_per_user_per_day }}</div>
+          </div>
+          <span class="tag">ID {{ bot.id }}</span>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="muted">No bots connected yet.</p>
+  {% endif %}
+</section>
+
+{% if selected_bot %}
+<section class="card">
+  <h2>Step 2 — Upload Audience CSV</h2>
+  <p class="muted">CSV format: <code>tg_id, locale</code></p>
+  <form method="post" action="/bot-owner/bots/{{ selected_bot.id }}/upload" enctype="multipart/form-data">
+    <input type="file" name="file" accept=".csv" required>
+    <small class="helper">Locales must be like <strong>en</strong> or <strong>en-US</strong>.</small>
+    <div class="form-actions">
+      <button class="button" type="submit">Upload & verify</button>
+    </div>
+  </form>
+  {% if request.query_params.get('uploaded') %}
+    <div class="alert success">
+      Uploaded {{ request.query_params.get('total') }} rows. Accepted {{ request.query_params.get('accepted') }}, Rejected {{ request.query_params.get('rejected') }}.
+      {% if request.query_params.get('error_report_id') %}
+        <a class="link" href="/bot-owner/bots/{{ selected_bot.id }}/error-report?report_id={{ request.query_params.get('error_report_id') }}">Download error report</a>
+      {% endif %}
+    </div>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Audience Verification</h2>
+  {% if verification %}
+    <div class="stats-grid" data-verification="{{ selected_bot.id }}">
+      <div>
+        <div class="stat-label">Verified / Total</div>
+        <div class="stat-value" data-stat="verified">{{ verification.verified_users }}</div>
+        <div class="muted">of <span data-stat="total">{{ verification.total_users }}</span></div>
+      </div>
+      <div>
+        <div class="stat-label">OK</div>
+        <div class="stat-value" data-stat="ok">{{ verification.ok_count }}</div>
+      </div>
+      <div>
+        <div class="stat-label">Blocked</div>
+        <div class="stat-value" data-stat="blocked">{{ verification.blocked_count }}</div>
+      </div>
+      <div>
+        <div class="stat-label">Not Started</div>
+        <div class="stat-value" data-stat="not_started">{{ verification.not_started_count }}</div>
+      </div>
+      <div>
+        <div class="stat-label">Other Errors</div>
+        <div class="stat-value" data-stat="other_error">{{ verification.other_error_count }}</div>
+      </div>
+      <div>
+        <div class="stat-label">ETA</div>
+        <div class="stat-value" data-stat="eta">{{ (verification.eta_seconds / 60) | round(1) }} min</div>
+      </div>
+    </div>
+    <div class="progress-bar">
+      <div class="progress" data-progress="{{ selected_bot.id }}" style="width: 0%"></div>
+    </div>
+  {% else %}
+    <p class="muted">Upload audience to start verification.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Verification Results Summary</h2>
+  {% if verification and verification.status.value == 'COMPLETED' %}
+    <div class="summary-grid">
+      <div><strong>Total:</strong> {{ verification.total_users }}</div>
+      <div><strong>OK:</strong> {{ verification.ok_count }}</div>
+      <div><strong>Not Started:</strong> {{ verification.not_started_count }}</div>
+      <div><strong>Blocked:</strong> {{ verification.blocked_count }}</div>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Locale</th>
+          <th>Total</th>
+          <th>OK</th>
+          <th>Not Started</th>
+          <th>Blocked</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for locale in locale_summary %}
+          <tr>
+            <td>{{ locale.locale }}</td>
+            <td>{{ locale.total }}</td>
+            <td>{{ locale.ok }} ({{ ((locale.ok / locale.total) * 100) | round(1) }}%)</td>
+            <td>{{ locale.not_started }} ({{ ((locale.not_started / locale.total) * 100) | round(1) }}%)</td>
+            <td>{{ locale.blocked }} ({{ ((locale.blocked / locale.total) * 100) | round(1) }}%)</td>
+          </tr>
+        {% endfor %}
+        {% if other_locales and other_locales.total > 0 %}
+          <tr>
+            <td>Other locales</td>
+            <td>{{ other_locales.total }}</td>
+            <td>{{ other_locales.ok }} ({{ ((other_locales.ok / other_locales.total) * 100) | round(1) }}%)</td>
+            <td>{{ other_locales.not_started }} ({{ ((other_locales.not_started / other_locales.total) * 100) | round(1) }}%)</td>
+            <td>{{ other_locales.blocked }} ({{ ((other_locales.blocked / other_locales.total) * 100) | round(1) }}%)</td>
+          </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">Results are shown after verification completes.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Step 3 — Pricing</h2>
+  {% if verification and verification.status.value == 'COMPLETED' %}
+    <form method="post" action="/bot-owner/bots/{{ selected_bot.id }}/pricing">
+      <table>
+        <thead>
+          <tr>
+            <th>Locale</th>
+            <th>For Sale</th>
+            <th>CPM</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for locale in locale_summary %}
+            {% set existing = (pricing_rows | selectattr('locale', 'equalto', locale.locale) | list) %}
+            {% set row = existing[0] if existing else None %}
+            <tr>
+              <td>
+                {{ locale.locale }}
+                <input type="hidden" name="locale_{{ locale.locale }}" value="1">
+              </td>
+              <td>
+                <input type="checkbox" name="sale_{{ locale.locale }}" data-sale-toggle="{{ locale.locale }}" {% if row is none or row.is_for_sale %}checked{% endif %}>
+              </td>
+              <td>
+                <input type="number" min="1" name="cpm_{{ locale.locale }}" data-cpm-input="{{ locale.locale }}" value="{{ row.cpm_cents if row else 10 }}">
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <div class="form-actions">
+        <button class="button" type="submit">Save pricing</button>
+      </div>
+    </form>
+  {% else %}
+    <p class="muted">Pricing unlocks after verification completes.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Step 4 — Test Push</h2>
+  <p class="muted">Test messages can be delivered only to users who have already started the bot.</p>
+  <form method="post" action="/bot-owner/bots/{{ selected_bot.id }}/test-push">
+    <label>
+      Verified tg_id <span class="required">*</span>
+      <input type="number" name="tg_id" required>
+      <small class="helper">Choose a verified user from your audience list.</small>
+    </label>
+    <label>
+      Message (HTML) <span class="required">*</span>
+      <textarea name="message" rows="4" required></textarea>
+      <small class="helper">Allowed tags: &lt;b&gt;, &lt;i&gt;, &lt;u&gt;, &lt;s&gt;, &lt;a href&gt;, &lt;code&gt;, &lt;pre&gt;.</small>
+    </label>
+    <div class="form-actions">
+      <button class="button" type="submit">Send test push</button>
+    </div>
+  </form>
+  {% if request.query_params.get('test_sent') %}
+    <div class="alert success">Test message sent successfully.</div>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}
