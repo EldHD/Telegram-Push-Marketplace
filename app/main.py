@@ -15,6 +15,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
@@ -294,7 +295,8 @@ async def bot_owner_portal(request: Request, db: Session = Depends(get_db)):
     if selected_bot:
         verification = db.query(BotVerification).filter_by(bot_id=selected_bot.id).first()
         locale_summary = db.execute(
-            """
+            text(
+                """
             SELECT locale,
                    COUNT(*) as total,
                    SUM(CASE WHEN verification_status = 'OK' THEN 1 ELSE 0 END) as ok,
@@ -303,7 +305,8 @@ async def bot_owner_portal(request: Request, db: Session = Depends(get_db)):
             FROM audience
             WHERE bot_id = :bot_id
             GROUP BY locale
-            """,
+                """
+            ),
             {"bot_id": selected_bot.id},
         ).fetchall()
         locale_summary, other_locales = compute_locale_summary(locale_summary)
