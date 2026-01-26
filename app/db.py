@@ -46,3 +46,13 @@ def ensure_bot_owner_email_column() -> None:
             )
         else:
             logger.warning("Skipped unique index on bot_owners.email due to duplicates.")
+
+
+def ensure_bot_username_unique_index() -> None:
+    inspector = inspect(engine)
+    if "bots" not in inspector.get_table_names():
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            text("CREATE UNIQUE INDEX IF NOT EXISTS uq_bots_username ON bots (username)")
+        )

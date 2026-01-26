@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
+os.environ.setdefault("DATABASE_URL", "sqlite:////tmp/telegram_push_test.db")
 
 from app.main import TOKEN_RE, _normalize_username
 from app.utils.security import validate_fernet_key

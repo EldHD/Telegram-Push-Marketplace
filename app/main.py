@@ -15,10 +15,11 @@ from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
-from .db import Base, engine, ensure_bot_owner_email_column, get_db
+from .db import Base, engine, ensure_bot_owner_email_column, ensure_bot_username_unique_index, get_db
 from .models import (
     Audience,
     Bot,
@@ -41,6 +42,7 @@ app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "de
 @app.on_event("startup")
 def ensure_schema_on_startup() -> None:
     ensure_bot_owner_email_column()
+    ensure_bot_username_unique_index()
     ensure_fernet_key_config()
 
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
@@ -85,6 +87,33 @@ def get_owner(db: Session, email: str) -> BotOwner:
         db.commit()
         db.refresh(owner)
     return owner
+
+
+def apply_bot_save(
+    db: Session,
+    owner: BotOwner,
+    normalized_username: str,
+    encrypted_token: str,
+    max_pushes_per_user_per_day: int,
+):
+    existing = db.query(Bot).filter_by(username=normalized_username).first()
+    if existing:
+        if existing.owner_id == owner.id:
+            return "duplicate", existing
+        existing.owner_id = owner.id
+        existing.token_encrypted = encrypted_token
+        existing.max_pushes_per_user_per_day = max_pushes_per_user_per_day
+        db.commit()
+        return "transferred", existing
+    bot = Bot(
+        owner_id=owner.id,
+        username=normalized_username,
+        token_encrypted=encrypted_token,
+        max_pushes_per_user_per_day=max_pushes_per_user_per_day,
+    )
+    db.add(bot)
+    db.commit()
+    return "created", bot
 
 
 def validate_bot_username(username: str) -> bool:
@@ -244,11 +273,18 @@ async def validate_bot_token(request: Request, payload: BotValidationRequest):
 async def bot_owner_portal(request: Request, db: Session = Depends(get_db)):
     email = require_login(request)
     owner = db.query(BotOwner).filter_by(email=email).first()
+    if not owner:
+        owner = get_owner(db, email)
     bots = db.query(Bot).filter_by(owner_id=owner.id).order_by(Bot.created_at.desc()).all()
     selected_bot_id = request.query_params.get("bot_id")
     selected_bot = None
     if selected_bot_id:
-        selected_bot = db.query(Bot).filter_by(id=int(selected_bot_id), owner_id=owner.id).first()
+        try:
+            bot_id = int(selected_bot_id)
+        except (TypeError, ValueError):
+            bot_id = None
+        if bot_id:
+            selected_bot = db.query(Bot).filter_by(id=bot_id, owner_id=owner.id).first()
     elif bots:
         selected_bot = bots[0]
     verification = None
@@ -341,14 +377,36 @@ async def create_bot(
         encrypted_token = encrypt_token(token)
     except RuntimeError:
         raise HTTPException(status_code=500, detail="Encryption configuration error")
-    bot = Bot(
-        owner_id=owner.id,
-        username=normalized_username,
-        token_encrypted=encrypted_token,
-        max_pushes_per_user_per_day=max_pushes_per_user_per_day,
-    )
-    db.add(bot)
-    db.commit()
+    try:
+        status, bot = apply_bot_save(
+            db,
+            owner,
+            normalized_username,
+            encrypted_token,
+            max_pushes_per_user_per_day,
+        )
+    except IntegrityError:
+        db.rollback()
+        status, bot = apply_bot_save(
+            db,
+            owner,
+            normalized_username,
+            encrypted_token,
+            max_pushes_per_user_per_day,
+        )
+    if status == "duplicate":
+        errors["username"] = "This bot is already connected to your account."
+        return templates.TemplateResponse(
+            "bot_owner.html",
+            {
+                "request": request,
+                "owner": owner,
+                "bots": db.query(Bot).filter_by(owner_id=owner.id).all(),
+                "selected_bot": None,
+                "errors": errors,
+            },
+            status_code=400,
+        )
     return RedirectResponse(f"/bot-owner?bot_id={bot.id}", status_code=303)
 
 
