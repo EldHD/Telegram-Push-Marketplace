@@ -25,6 +25,14 @@ async function pollVerification() {
       const el = document.querySelector(`[data-stat="${key}"]`);
       if (el) el.textContent = value;
     });
+    const localeList = document.getElementById('locale-status-list');
+    if (localeList && Array.isArray(data.locales)) {
+      localeList.innerHTML = data.locales
+        .map((row) => {
+          return `<div class="locale-pill">${row.locale}: ok ${row.ok}/${row.total}</div>`;
+        })
+        .join('');
+    }
   } catch (err) {
     console.warn(err);
   }
@@ -160,3 +168,15 @@ function initBotTokenValidation() {
 }
 
 window.addEventListener('load', initBotTokenValidation);
+
+function initWizardSteps() {
+  const wizard = document.querySelector('.wizard');
+  if (!wizard) return;
+  const currentStep = Number(wizard.getAttribute('data-current-step') || 1);
+  document.querySelectorAll('.wizard-step').forEach((step) => {
+    const stepNumber = Number(step.getAttribute('data-step'));
+    step.style.display = stepNumber === currentStep ? 'block' : 'none';
+  });
+}
+
+window.addEventListener('load', initWizardSteps);

@@ -2,6 +2,7 @@ import time
 from datetime import datetime
 
 import requests
+from sqlalchemy import case
 from sqlalchemy.orm import Session
 
 from app.celery_app import celery_app
@@ -10,6 +11,31 @@ from app.models import Audience, Bot, BotVerification, VerificationRunStatus, Ve
 from app.utils.security import decrypt_token
 
 REQUEST_INTERVAL_SECONDS = 1 / 15
+LOCALE_PRIORITY = [
+    "ru",
+    "uk",
+    "be",
+    "kk",
+    "uz",
+    "ky",
+    "tg",
+    "hy",
+    "az",
+    "ka",
+    "ro",
+    "zh-hans",
+    "zh-hant",
+    "ja",
+    "ko",
+    "id",
+    "ms",
+    "th",
+    "vi",
+    "hi",
+    "bn",
+    "ur",
+    "en",
+]
 
 
 @celery_app.task(name="app.tasks.verification.start_verification")
@@ -32,14 +58,18 @@ def start_verification(bot_id: int) -> None:
 
         last_request_time = 0.0
         while True:
+            locale_order = case(
+                {locale: idx for idx, locale in enumerate(LOCALE_PRIORITY)},
+                value=Audience.locale,
+                else_=len(LOCALE_PRIORITY) + 1,
+            )
             batch = (
                 db.query(Audience)
                 .filter(
                     Audience.bot_id == bot_id,
-                    Audience.tg_id > last_tg_id,
                     Audience.verification_status == VerificationStatus.UNKNOWN,
                 )
-                .order_by(Audience.tg_id.asc())
+                .order_by(locale_order.asc(), Audience.tg_id.asc())
                 .limit(200)
                 .all()
             )

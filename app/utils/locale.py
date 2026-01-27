@@ -1,6 +1,6 @@
 import re
 
-LOCALE_RE = re.compile(r"^[a-z]{2}(-[A-Z]{2})?$")
+LOCALE_RE = re.compile(r"^[a-z]{2}(-[a-z]{2,4})?$", re.IGNORECASE)
 
 
 def normalize_locale(value: str) -> str:
@@ -9,7 +9,7 @@ def normalize_locale(value: str) -> str:
         return ""
     if "-" in value:
         language, region = value.split("-", 1)
-        normalized = f"{language.lower()}-{region.upper()}"
+        normalized = f"{language.lower()}-{region.lower()}"
     else:
         normalized = value.lower()
     return normalized

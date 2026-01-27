@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="page-header">
+  <div>
+    <h1>Bots</h1>
+    <p class="muted">Connect and manage your Telegram bots.</p>
+  </div>
+  <a class="button" href="/bot-owner/bots/new">Add my bot</a>
+</section>
+
+<section class="card dark">
+  {% if bots %}
+    <div class="bot-table">
+      <div class="bot-row header">
+        <div>Bot</div>
+        <div>Max pushes/day</div>
+        <div>Status</div>
+      </div>
+      {% for bot in bots %}
+        {% set status = bot_statuses.get(bot.id) %}
+        <a class="bot-row" href="/bot-owner/bots/{{ bot.id }}">
+          <div>
+            <strong>{{ bot.username }}</strong>
+            <div class="muted">ID {{ bot.id }}</div>
+          </div>
+          <div>{{ bot.max_pushes_per_user_per_day }}</div>
+          <div class="status-pill">
+            <span class="dot {{ 'ok' if status.verified else 'warn' }}"></span>
+            {% if status.priced %}Priced{% elif status.verified %}Verified{% elif status.uploaded %}Uploaded{% else %}New{% endif %}
+          </div>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="muted">No bots connected yet.</p>
+  {% endif %}
+</section>
+{% endblock %}

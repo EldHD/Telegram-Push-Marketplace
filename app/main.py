@@ -4,6 +4,7 @@ import os
 import re
 import time
 import uuid
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -125,6 +126,43 @@ def _normalize_username(username: str) -> str:
     return username.strip().lstrip("@").lower()
 
 
+def _safe_csv_reader(content: bytes) -> csv.reader:
+    decoded = content.decode("utf-8-sig", errors="replace")
+    sample = decoded[:2048]
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=[",", ";", "\t"])
+    except csv.Error:
+        dialect = csv.excel
+    return csv.reader(io.StringIO(decoded), dialect)
+
+
+def parse_audience_rows(content: bytes) -> Tuple[List[Tuple[int, str]], List[Tuple[int, str, str, str]]]:
+    reader = _safe_csv_reader(content)
+    rows = list(reader)
+    errors = []
+    accepted = []
+    if not rows:
+        return accepted, errors
+    first = rows[0]
+    has_header = any(cell.lower().strip() in {"tg_id", "locale"} for cell in first)
+    start_index = 1 if has_header else 0
+    for index, row in enumerate(rows[start_index:], start=start_index + 1):
+        if not row or len(row) < 2:
+            errors.append((index + 1, "", "", "Row must contain tg_id and locale"))
+            continue
+        tg_id_raw = str(row[0]).strip()
+        locale_raw = str(row[1]).strip()
+        if not tg_id_raw.isdigit() or int(tg_id_raw) <= 0:
+            errors.append((index + 1, tg_id_raw, locale_raw, "tg_id must be a positive integer"))
+            continue
+        normalized_locale = normalize_locale(locale_raw.replace("_", "-"))
+        if not normalized_locale or not is_valid_locale(normalized_locale):
+            errors.append((index + 1, tg_id_raw, locale_raw, "locale must be in format xx or xx-YY"))
+            continue
+        accepted.append((int(tg_id_raw), normalized_locale))
+    return accepted, errors
+
+
 def validate_telegram_token(bot_username: str, token: str) -> Dict:
     token = token.strip()
     if not TOKEN_RE.match(token):
@@ -204,7 +242,7 @@ def allowed_html(value: str) -> bool:
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     if request.session.get("user"):
-        return RedirectResponse("/bot-owner")
+        return RedirectResponse("/bot-owner/bots")
     return RedirectResponse("/login")
 
 
@@ -271,29 +309,66 @@ async def validate_bot_token(request: Request, payload: BotValidationRequest):
 
 
 @app.get("/bot-owner", response_class=HTMLResponse)
-async def bot_owner_portal(request: Request, db: Session = Depends(get_db)):
+async def bot_owner_portal_redirect(request: Request):
+    require_login(request)
+    return RedirectResponse("/bot-owner/bots")
+
+
+@app.get("/bot-owner/bots", response_class=HTMLResponse)
+async def bot_owner_bots(request: Request, db: Session = Depends(get_db)):
     email = require_login(request)
     owner = db.query(BotOwner).filter_by(email=email).first()
     if not owner:
         owner = get_owner(db, email)
     bots = db.query(Bot).filter_by(owner_id=owner.id).order_by(Bot.created_at.desc()).all()
-    selected_bot_id = request.query_params.get("bot_id")
-    selected_bot = None
-    if selected_bot_id:
-        try:
-            bot_id = int(selected_bot_id)
-        except (TypeError, ValueError):
-            bot_id = None
-        if bot_id:
-            selected_bot = db.query(Bot).filter_by(id=bot_id, owner_id=owner.id).first()
-    elif bots:
-        selected_bot = bots[0]
-    verification = None
-    pricing_rows = []
+    bot_statuses = {}
+    for bot in bots:
+        verification = db.query(BotVerification).filter_by(bot_id=bot.id).first()
+        has_audience = db.query(Audience).filter_by(bot_id=bot.id).first() is not None
+        priced = db.query(BotPricing).filter_by(bot_id=bot.id).first() is not None
+        bot_statuses[bot.id] = {
+            "uploaded": has_audience,
+            "verified": bool(verification and verification.status.value == "COMPLETED"),
+            "priced": priced,
+        }
+    return templates.TemplateResponse(
+        "bots_list.html",
+        {
+            "request": request,
+            "bots": bots,
+            "bot_statuses": bot_statuses,
+        },
+    )
+
+
+@app.get("/bot-owner/bots/new", response_class=HTMLResponse)
+async def bot_owner_new(request: Request, db: Session = Depends(get_db)):
+    require_login(request)
+    return templates.TemplateResponse(
+        "bot_wizard.html",
+        {
+            "request": request,
+            "bot": None,
+            "step": 1,
+        },
+    )
+
+
+@app.get("/bot-owner/bots/{bot_id}", response_class=HTMLResponse)
+async def bot_owner_wizard(request: Request, bot_id: int, db: Session = Depends(get_db)):
+    email = require_login(request)
+    owner = db.query(BotOwner).filter_by(email=email).first()
+    if not owner:
+        owner = get_owner(db, email)
+    bot = db.query(Bot).filter_by(id=bot_id, owner_id=owner.id).first()
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    verification = db.query(BotVerification).filter_by(bot_id=bot.id).first()
+    pricing_rows = db.query(BotPricing).filter_by(bot_id=bot.id).all()
     locale_summary = []
     other_locales = None
-    if selected_bot:
-        verification = db.query(BotVerification).filter_by(bot_id=selected_bot.id).first()
+    locale_counts = []
+    if bot:
         locale_summary = db.execute(
             text(
                 """
@@ -307,23 +382,39 @@ async def bot_owner_portal(request: Request, db: Session = Depends(get_db)):
             GROUP BY locale
                 """
             ),
-            {"bot_id": selected_bot.id},
+            {"bot_id": bot.id},
         ).fetchall()
         locale_summary, other_locales = compute_locale_summary(locale_summary)
-        pricing_rows = db.query(BotPricing).filter_by(bot_id=selected_bot.id).all()
+        locale_counts = db.execute(
+            text(
+                """
+            SELECT locale, COUNT(*) as total
+            FROM audience
+            WHERE bot_id = :bot_id
+            GROUP BY locale
+            ORDER BY total DESC
+                """
+            ),
+            {"bot_id": bot.id},
+        ).fetchall()
     return templates.TemplateResponse(
-        "bot_owner.html",
+        "bot_wizard.html",
         {
             "request": request,
-            "owner": owner,
-            "bots": bots,
-            "selected_bot": selected_bot,
+            "bot": bot,
             "verification": verification,
             "locale_summary": locale_summary,
             "other_locales": other_locales,
+            "locale_counts": locale_counts,
             "pricing_rows": pricing_rows,
+            "step": int(request.query_params.get("step", 1)),
         },
     )
+
+
+@app.get("/bot-owner/bots/list", response_class=HTMLResponse)
+async def bot_owner_bots_alias(request: Request, db: Session = Depends(get_db)):
+    return await bot_owner_bots(request, db)
 
 
 @app.post("/bot-owner/bots")
@@ -344,13 +435,13 @@ async def create_bot(
         errors["max_pushes_per_user_per_day"] = "Max pushes per user must be at least 1."
     if errors:
         return templates.TemplateResponse(
-            "bot_owner.html",
+            "bot_wizard.html",
             {
                 "request": request,
                 "owner": owner,
-                "bots": db.query(Bot).filter_by(owner_id=owner.id).all(),
-                "selected_bot": None,
+                "bot": None,
                 "errors": errors,
+                "step": 1,
             },
             status_code=400,
         )
@@ -366,13 +457,13 @@ async def create_bot(
             errors["token"] = "Invalid Telegram token"
     if errors:
         return templates.TemplateResponse(
-            "bot_owner.html",
+            "bot_wizard.html",
             {
                 "request": request,
                 "owner": owner,
-                "bots": db.query(Bot).filter_by(owner_id=owner.id).all(),
-                "selected_bot": None,
+                "bot": None,
                 "errors": errors,
+                "step": 1,
             },
             status_code=400,
         )
@@ -400,17 +491,17 @@ async def create_bot(
     if status == "duplicate":
         errors["username"] = "This bot is already connected to your account."
         return templates.TemplateResponse(
-            "bot_owner.html",
+            "bot_wizard.html",
             {
                 "request": request,
                 "owner": owner,
-                "bots": db.query(Bot).filter_by(owner_id=owner.id).all(),
-                "selected_bot": None,
+                "bot": None,
                 "errors": errors,
+                "step": 1,
             },
-            status_code=400,
+            status_code=409,
         )
-    return RedirectResponse(f"/bot-owner?bot_id={bot.id}", status_code=303)
+    return RedirectResponse(f"/bot-owner/bots/{bot.id}?step=2", status_code=303)
 
 
 @app.post("/bot-owner/bots/{bot_id}/upload")
@@ -427,30 +518,19 @@ async def upload_audience(
         raise HTTPException(status_code=404, detail="Bot not found")
 
     content = await file.read()
-    reader = csv.DictReader(io.StringIO(content.decode()))
-    errors = []
+    accepted_rows, errors = parse_audience_rows(content)
     accepted = 0
-    total = 0
-    for row_number, row in enumerate(reader, start=2):
-        total += 1
-        tg_id_raw = row.get("tg_id", "").strip()
-        locale_raw = row.get("locale", "").strip()
-        reason = None
-        if not tg_id_raw.isdigit() or int(tg_id_raw) <= 0:
-            reason = "tg_id must be a positive integer"
-        normalized_locale = normalize_locale(locale_raw)
-        if not normalized_locale or not is_valid_locale(normalized_locale):
-            reason = "locale must be in format xx or xx-YY"
-        if reason:
-            errors.append((row_number, tg_id_raw, locale_raw, reason))
-            continue
-        exists = db.query(Audience).filter_by(bot_id=bot_id, tg_id=int(tg_id_raw)).first()
+    total = len(accepted_rows) + len(errors)
+    locale_counter = Counter()
+    for tg_id, locale in accepted_rows:
+        exists = db.query(Audience).filter_by(bot_id=bot_id, tg_id=tg_id).first()
         if exists:
-            errors.append((row_number, tg_id_raw, locale_raw, "Duplicate tg_id for this bot"))
+            locale_counter[locale] += 1
             continue
-        audience = Audience(bot_id=bot_id, tg_id=int(tg_id_raw), locale=normalized_locale)
+        audience = Audience(bot_id=bot_id, tg_id=tg_id, locale=locale)
         db.add(audience)
         accepted += 1
+        locale_counter[locale] += 1
     db.commit()
 
     error_report_id = None
@@ -467,23 +547,21 @@ async def upload_audience(
         if not verification:
             verification = BotVerification(
                 bot_id=bot_id,
-                status=VerificationRunStatus.RUNNING,
+                status=VerificationRunStatus.FAILED,
                 total_users=total_users,
                 eta_seconds=eta_seconds,
             )
             db.add(verification)
         else:
-            verification.status = VerificationRunStatus.RUNNING
             verification.total_users = total_users
             verification.eta_seconds = eta_seconds
         db.commit()
-        start_verification.delay(bot_id)
 
     params = f"bot_id={bot_id}&uploaded=1"
     if error_report_id:
         params += f"&error_report_id={error_report_id}"
     params += f"&total={total}&accepted={accepted}&rejected={len(errors)}"
-    return RedirectResponse(f"/bot-owner?{params}", status_code=303)
+    return RedirectResponse(f"/bot-owner/bots/{bot_id}?step=3&{params}", status_code=303)
 
 
 @app.get("/bot-owner/bots/{bot_id}/error-report")
@@ -511,6 +589,21 @@ async def verification_status(request: Request, bot_id: int, db: Session = Depen
         return {"status": "NONE"}
     remaining = max(verification.total_users - verification.verified_users, 0)
     eta_seconds = int(remaining / 15)
+    locale_stats = db.execute(
+        text(
+            """
+        SELECT locale,
+               COUNT(*) as total,
+               SUM(CASE WHEN verification_status = 'OK' THEN 1 ELSE 0 END) as ok,
+               SUM(CASE WHEN verification_status = 'BLOCKED' THEN 1 ELSE 0 END) as blocked,
+               SUM(CASE WHEN verification_status = 'OTHER_ERROR' THEN 1 ELSE 0 END) as failed
+        FROM audience
+        WHERE bot_id = :bot_id
+        GROUP BY locale
+            """
+        ),
+        {"bot_id": bot_id},
+    ).fetchall()
     return {
         "status": verification.status,
         "total": verification.total_users,
@@ -520,7 +613,44 @@ async def verification_status(request: Request, bot_id: int, db: Session = Depen
         "not_started": verification.not_started_count,
         "other_error": verification.other_error_count,
         "eta_seconds": eta_seconds,
+        "locales": [
+            {
+                "locale": row[0],
+                "total": row[1],
+                "ok": row[2],
+                "blocked": row[3],
+                "failed": row[4],
+            }
+            for row in locale_stats
+        ],
     }
+
+
+@app.post("/bot-owner/bots/{bot_id}/verify/start")
+async def start_verification_job(request: Request, bot_id: int, db: Session = Depends(get_db)):
+    email = require_login(request)
+    owner = db.query(BotOwner).filter_by(email=email).first()
+    bot = db.query(Bot).filter_by(id=bot_id, owner_id=owner.id).first()
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    total_users = db.query(Audience).filter_by(bot_id=bot_id).count()
+    eta_seconds = int(total_users / 15) if total_users else 0
+    verification = db.query(BotVerification).filter_by(bot_id=bot_id).first()
+    if not verification:
+        verification = BotVerification(
+            bot_id=bot_id,
+            status=VerificationRunStatus.RUNNING,
+            total_users=total_users,
+            eta_seconds=eta_seconds,
+        )
+        db.add(verification)
+    else:
+        verification.status = VerificationRunStatus.RUNNING
+        verification.total_users = total_users
+        verification.eta_seconds = eta_seconds
+    db.commit()
+    start_verification.delay(bot_id)
+    return RedirectResponse(f"/bot-owner/bots/{bot_id}?step=4&verification_started=1", status_code=303)
 
 
 @app.post("/bot-owner/bots/{bot_id}/pricing")
@@ -535,22 +665,20 @@ async def save_pricing(request: Request, bot_id: int, db: Session = Depends(get_
     enabled_locales = 0
     for locale_key in locale_inputs:
         locale = locale_key.replace("locale_", "")
-        is_for_sale = form.get(f"sale_{locale}") == "on"
         cpm_raw = form.get(f"cpm_{locale}")
-        if is_for_sale:
-            enabled_locales += 1
-            if not cpm_raw or int(cpm_raw) <= 0:
-                raise HTTPException(status_code=400, detail="CPM must be positive")
+        enabled_locales += 1
+        if not cpm_raw or int(cpm_raw) <= 0:
+            raise HTTPException(status_code=400, detail="CPM must be positive")
         pricing = db.query(BotPricing).filter_by(bot_id=bot_id, locale=locale).first()
         if not pricing:
             pricing = BotPricing(bot_id=bot_id, locale=locale)
             db.add(pricing)
-        pricing.is_for_sale = is_for_sale
-        pricing.cpm_cents = int(cpm_raw) if is_for_sale else None
+        pricing.is_for_sale = True
+        pricing.cpm_cents = int(cpm_raw)
     if enabled_locales == 0:
         raise HTTPException(status_code=400, detail="At least one locale must be for sale")
     db.commit()
-    return RedirectResponse(f"/bot-owner?bot_id={bot_id}&pricing_saved=1", status_code=303)
+    return RedirectResponse(f"/bot-owner/bots/{bot_id}?step=4&pricing_saved=1", status_code=303)
 
 
 @app.post("/bot-owner/bots/{bot_id}/test-push")
@@ -592,4 +720,4 @@ async def test_push(
     data = resp.json()
     if not data.get("ok"):
         raise HTTPException(status_code=400, detail=data.get("description", "Send failed"))
-    return RedirectResponse(f"/bot-owner?bot_id={bot_id}&test_sent=1", status_code=303)
+    return RedirectResponse(f"/bot-owner/bots/{bot_id}?step=4&test_sent=1", status_code=303)

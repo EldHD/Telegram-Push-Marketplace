@@ -53,6 +53,21 @@ def ensure_bot_username_unique_index() -> None:
     if "bots" not in inspector.get_table_names():
         return
     with engine.begin() as conn:
-        conn.execute(
-            text("CREATE UNIQUE INDEX IF NOT EXISTS uq_bots_username ON bots (username)")
-        )
+        duplicate_count = conn.execute(
+            text(
+                "SELECT COUNT(*) FROM ("
+                "SELECT username, COUNT(*) FROM bots "
+                "WHERE username IS NOT NULL "
+                "GROUP BY username HAVING COUNT(*) > 1"
+                ") duplicates"
+            )
+        ).scalar()
+        if duplicate_count == 0:
+            conn.execute(
+                text("CREATE UNIQUE INDEX IF NOT EXISTS uq_bots_username ON bots (username)")
+            )
+        else:
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_bots_username ON bots (username)")
+            )
+            logger.warning("Skipped unique index on bots.username due to duplicates.")
