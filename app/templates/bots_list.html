@@ -11,29 +11,47 @@
 
 <section class="card dark">
   {% if bots %}
-    <div class="bot-table">
-      <div class="bot-row header">
+    <div class="table">
+      <div class="table-row header">
         <div>Bot</div>
-        <div>Max pushes/day</div>
-        <div>Status</div>
+        <div>Audience total</div>
+        <div>Audience RU</div>
+        <div>Earned all-time</div>
+        <div>Created</div>
+        <div>Actions</div>
       </div>
       {% for bot in bots %}
-        {% set status = bot_statuses.get(bot.id) %}
-        <a class="bot-row" href="/bot-owner/bots/{{ bot.id }}">
-          <div>
-            <strong>{{ bot.username }}</strong>
-            <div class="muted">ID {{ bot.id }}</div>
+        <div class="table-row">
+          <div><strong>{{ bot.username }}</strong></div>
+          <div>{{ bot.audience_total }}</div>
+          <div>{{ bot.audience_ru }}</div>
+          <div>{{ '%.2f' | format(bot.earned_all_time / 100) }}</div>
+          <div>{{ bot.created_at.strftime('%Y-%m-%d') }}</div>
+          <div class="actions">
+            <a class="link" href="/bot-owner/bots/{{ bot.id }}">Edit</a>
+            <button class="link danger" data-delete-bot="{{ bot.id }}" type="button">Delete</button>
           </div>
-          <div>{{ bot.max_pushes_per_user_per_day }}</div>
-          <div class="status-pill">
-            <span class="dot {{ 'ok' if status.verified else 'warn' }}"></span>
-            {% if status.priced %}Priced{% elif status.verified %}Verified{% elif status.uploaded %}Uploaded{% else %}New{% endif %}
-          </div>
-        </a>
+        </div>
       {% endfor %}
     </div>
   {% else %}
-    <p class="muted">No bots connected yet.</p>
+    <div class="empty-state">
+      <p>No bots yet.</p>
+      <a class="button" href="/bot-owner/bots/new">Add my bot</a>
+    </div>
   {% endif %}
 </section>
+
+<div class="modal" id="delete-modal">
+  <div class="modal-card">
+    <h3>Delete bot?</h3>
+    <p class="muted">This will remove the bot from your dashboard. Data will be kept in the system.</p>
+    <form method="post" id="delete-form">
+      <div class="form-actions">
+        <button class="button secondary" type="button" data-modal-close>Cancel</button>
+        <button class="button danger" type="submit">Delete</button>
+      </div>
+    </form>
+  </div>
+</div>
 {% endblock %}

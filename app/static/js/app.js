@@ -180,3 +180,23 @@ function initWizardSteps() {
 }
 
 window.addEventListener('load', initWizardSteps);
+
+function initDeleteModal() {
+  const modal = document.getElementById('delete-modal');
+  if (!modal) return;
+  const form = document.getElementById('delete-form');
+  document.querySelectorAll('[data-delete-bot]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const botId = button.getAttribute('data-delete-bot');
+      form.setAttribute('action', `/bot-owner/bots/${botId}/delete`);
+      modal.classList.add('open');
+    });
+  });
+  modal.querySelectorAll('[data-modal-close]').forEach((button) => {
+    button.addEventListener('click', () => {
+      modal.classList.remove('open');
+    });
+  });
+}
+
+window.addEventListener('load', initDeleteModal);

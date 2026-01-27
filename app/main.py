@@ -21,7 +21,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
-from .db import Base, engine, ensure_bot_owner_email_column, ensure_bot_username_unique_index, get_db
+from .db import (
+    Base,
+    engine,
+    ensure_bot_columns,
+    ensure_bot_owner_email_column,
+    ensure_bot_username_unique_index,
+    get_db,
+)
 from .models import (
     Audience,
     Bot,
@@ -45,6 +52,7 @@ app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "de
 def ensure_schema_on_startup() -> None:
     ensure_bot_owner_email_column()
     ensure_bot_username_unique_index()
+    ensure_bot_columns()
     ensure_fernet_key_config()
 
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
@@ -112,6 +120,9 @@ def apply_bot_save(
         username=normalized_username,
         token_encrypted=encrypted_token,
         max_pushes_per_user_per_day=max_pushes_per_user_per_day,
+        audience_total=0,
+        audience_ru=0,
+        earned_all_time=0,
     )
     db.add(bot)
     db.commit()
@@ -320,7 +331,12 @@ async def bot_owner_bots(request: Request, db: Session = Depends(get_db)):
     owner = db.query(BotOwner).filter_by(email=email).first()
     if not owner:
         owner = get_owner(db, email)
-    bots = db.query(Bot).filter_by(owner_id=owner.id).order_by(Bot.created_at.desc()).all()
+    bots = (
+        db.query(Bot)
+        .filter(Bot.owner_id == owner.id, Bot.deleted_at.is_(None))
+        .order_by(Bot.created_at.desc())
+        .all()
+    )
     bot_statuses = {}
     for bot in bots:
         verification = db.query(BotVerification).filter_by(bot_id=bot.id).first()
@@ -336,8 +352,8 @@ async def bot_owner_bots(request: Request, db: Session = Depends(get_db)):
         {
             "request": request,
             "bots": bots,
-            "bot_statuses": bot_statuses,
-        },
+        "bot_statuses": bot_statuses,
+    },
     )
 
 
@@ -360,7 +376,11 @@ async def bot_owner_wizard(request: Request, bot_id: int, db: Session = Depends(
     owner = db.query(BotOwner).filter_by(email=email).first()
     if not owner:
         owner = get_owner(db, email)
-    bot = db.query(Bot).filter_by(id=bot_id, owner_id=owner.id).first()
+    bot = (
+        db.query(Bot)
+        .filter(Bot.id == bot_id, Bot.owner_id == owner.id, Bot.deleted_at.is_(None))
+        .first()
+    )
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
     verification = db.query(BotVerification).filter_by(bot_id=bot.id).first()
@@ -513,7 +533,11 @@ async def upload_audience(
 ):
     email = require_login(request)
     owner = db.query(BotOwner).filter_by(email=email).first()
-    bot = db.query(Bot).filter_by(id=bot_id, owner_id=owner.id).first()
+    bot = (
+        db.query(Bot)
+        .filter(Bot.id == bot_id, Bot.owner_id == owner.id, Bot.deleted_at.is_(None))
+        .first()
+    )
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
 
@@ -531,6 +555,16 @@ async def upload_audience(
         db.add(audience)
         accepted += 1
         locale_counter[locale] += 1
+    db.commit()
+
+    total_users = db.query(Audience).filter_by(bot_id=bot_id).count()
+    ru_users = (
+        db.query(Audience)
+        .filter(Audience.bot_id == bot_id, Audience.locale.like("ru%"))
+        .count()
+    )
+    bot.audience_total = total_users
+    bot.audience_ru = ru_users
     db.commit()
 
     error_report_id = None
@@ -651,6 +685,22 @@ async def start_verification_job(request: Request, bot_id: int, db: Session = De
     db.commit()
     start_verification.delay(bot_id)
     return RedirectResponse(f"/bot-owner/bots/{bot_id}?step=4&verification_started=1", status_code=303)
+
+
+@app.post("/bot-owner/bots/{bot_id}/delete")
+async def delete_bot(request: Request, bot_id: int, db: Session = Depends(get_db)):
+    email = require_login(request)
+    owner = db.query(BotOwner).filter_by(email=email).first()
+    bot = (
+        db.query(Bot)
+        .filter(Bot.id == bot_id, Bot.owner_id == owner.id, Bot.deleted_at.is_(None))
+        .first()
+    )
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    bot.deleted_at = datetime.utcnow()
+    db.commit()
+    return RedirectResponse("/bot-owner/bots", status_code=303)
 
 
 @app.post("/bot-owner/bots/{bot_id}/pricing")

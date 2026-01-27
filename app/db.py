@@ -71,3 +71,21 @@ def ensure_bot_username_unique_index() -> None:
                 text("CREATE INDEX IF NOT EXISTS ix_bots_username ON bots (username)")
             )
             logger.warning("Skipped unique index on bots.username due to duplicates.")
+
+
+def ensure_bot_columns() -> None:
+    inspector = inspect(engine)
+    if "bots" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("bots")}
+    with engine.begin() as conn:
+        if "audience_total" not in columns:
+            conn.execute(text("ALTER TABLE bots ADD COLUMN IF NOT EXISTS audience_total INTEGER DEFAULT 0"))
+        if "audience_ru" not in columns:
+            conn.execute(text("ALTER TABLE bots ADD COLUMN IF NOT EXISTS audience_ru INTEGER DEFAULT 0"))
+        if "earned_all_time" not in columns:
+            conn.execute(text("ALTER TABLE bots ADD COLUMN IF NOT EXISTS earned_all_time INTEGER DEFAULT 0"))
+        if "deleted_at" not in columns:
+            conn.execute(text("ALTER TABLE bots ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP"))
+        if "updated_at" not in columns:
+            conn.execute(text("ALTER TABLE bots ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP"))

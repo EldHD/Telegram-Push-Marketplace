@@ -16,9 +16,17 @@
       </div>
     {% endif %}
   </header>
-  <main class="container">
-    {% block content %}{% endblock %}
-  </main>
+  <div class="layout">
+    {% if request.session.get('user') %}
+      <aside class="sidebar">
+        <div class="sidebar-title">Dashboard</div>
+        <a class="sidebar-link active" href="/bot-owner/bots">Bots</a>
+      </aside>
+    {% endif %}
+    <main class="container">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
   <script src="/static/js/app.js"></script>
 </body>
 </html>

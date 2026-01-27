@@ -37,7 +37,12 @@ class Bot(Base):
     username = Column(String, nullable=False)
     token_encrypted = Column(String, nullable=False)
     max_pushes_per_user_per_day = Column(Integer, nullable=False, default=1)
+    audience_total = Column(Integer, nullable=False, default=0)
+    audience_ru = Column(Integer, nullable=False, default=0)
+    earned_all_time = Column(Integer, nullable=False, default=0)
+    deleted_at = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     owner = relationship("BotOwner", back_populates="bots")
     audience = relationship("Audience", back_populates="bot")
