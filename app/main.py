@@ -38,7 +38,7 @@ from .models import (
     VerificationRunStatus,
     VerificationStatus,
 )
-from .tasks.verification import start_verification
+from .tasks.verification import start_verification, start_verification_for_locale
 from .utils.locale import is_valid_locale, normalize_locale
 from .utils.security import decrypt_token, encrypt_token, ensure_fernet_key_config
 
@@ -270,6 +270,7 @@ def build_wizard_context(
     owner: BotOwner | None = None,
     errors: Dict | None = None,
     test_results: List[Dict] | None = None,
+    test_summary: Dict | None = None,
 ) -> Dict:
     verification = None
     pricing_rows = []
@@ -277,6 +278,7 @@ def build_wizard_context(
     other_locales = None
     locale_counts = []
     pricing_locales = []
+    locale_stats = []
     if bot:
         verification = db.query(BotVerification).filter_by(bot_id=bot.id).first()
         pricing_rows = db.query(BotPricing).filter_by(bot_id=bot.id).all()
@@ -309,6 +311,24 @@ def build_wizard_context(
             {"bot_id": bot.id},
         ).fetchall()
         pricing_locales = _pricing_locales(locale_counts)
+        locale_stats = db.execute(
+            text(
+                """
+            SELECT locale,
+                   COUNT(*) as total,
+                   SUM(CASE WHEN verification_status = 'OK' THEN 1 ELSE 0 END) as verified,
+                   MAX(last_verified_at) as last_verified_at
+            FROM audience
+            WHERE bot_id = :bot_id
+            GROUP BY locale
+                """
+            ),
+            {"bot_id": bot.id},
+        ).fetchall()
+        locale_stats = sorted(
+            locale_stats,
+            key=lambda row: (0 if row[2] else 1, -(row[1] or 0)),
+        )
     return {
         "request": request,
         "owner": owner,
@@ -317,11 +337,17 @@ def build_wizard_context(
         "locale_summary": locale_summary,
         "other_locales": other_locales,
         "locale_counts": locale_counts,
+        "locale_stats": locale_stats,
         "pricing_rows": pricing_rows,
         "pricing_locales": pricing_locales,
         "step": step,
         "errors": errors,
         "test_results": test_results or [],
+        "test_summary": test_summary or {},
+        "can_finish": bool(
+            bot
+            and request.session.get("last_test_success_bot_id") == bot.id
+        ),
     }
 
 
@@ -473,8 +499,6 @@ async def create_bot(
     errors = {}
     if not validate_bot_username(username):
         errors["username"] = "Bot username must look like @mybot and end with 'bot'."
-    if max_pushes_per_user_per_day < 1:
-        errors["max_pushes_per_user_per_day"] = "Max pushes per user must be at least 1."
     if errors:
         context = build_wizard_context(db, None, 1, request, owner=owner, errors=errors)
         return templates.TemplateResponse("bot_wizard.html", context, status_code=400)
@@ -516,7 +540,7 @@ async def create_bot(
         errors["username"] = "This bot is already connected to your account."
         context = build_wizard_context(db, None, 1, request, owner=owner, errors=errors)
         return templates.TemplateResponse("bot_wizard.html", context, status_code=409)
-    return RedirectResponse(f"/bot-owner/bots/{bot.id}?step=2", status_code=303)
+    return RedirectResponse(f"/bot-owner/bots/{bot.id}?step=1&saved=1", status_code=303)
 
 
 @app.post("/bot-owner/bots/{bot_id}/token")
@@ -558,7 +582,7 @@ async def update_bot_token(
     bot.token_encrypted = encrypted_token
     bot.token_needs_update = False
     db.commit()
-    return RedirectResponse(f"/bot-owner/bots/{bot.id}?step=2&token_updated=1", status_code=303)
+    return RedirectResponse(f"/bot-owner/bots/{bot.id}?step=1&token_updated=1", status_code=303)
 
 
 @app.post("/bot-owner/bots/{bot_id}/upload")
@@ -637,7 +661,7 @@ async def upload_audience(
     if error_report_id:
         params += f"&error_report_id={error_report_id}"
     params += f"&total={total}&accepted={accepted}&rejected={len(errors)}"
-    return RedirectResponse(f"/bot-owner/bots/{bot_id}?step=3&{params}", status_code=303)
+    return RedirectResponse(f"/bot-owner/bots/{bot_id}?step=2&{params}", status_code=303)
 
 
 @app.get("/bot-owner/bots/{bot_id}/error-report")
@@ -733,7 +757,31 @@ async def start_verification_job(request: Request, bot_id: int, db: Session = De
         verification.eta_seconds = eta_seconds
     db.commit()
     start_verification.delay(bot_id)
-    return RedirectResponse(f"/bot-owner/bots/{bot_id}?step=4&verification_started=1", status_code=303)
+    return RedirectResponse(f"/bot-owner/bots/{bot_id}?step=2&verification_started=1", status_code=303)
+
+
+@app.post("/bot-owner/bots/{bot_id}/verify/locale")
+async def start_verification_locale(
+    request: Request,
+    bot_id: int,
+    locale: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    email = require_login(request)
+    owner = db.query(BotOwner).filter_by(email=email).first()
+    bot = db.query(Bot).filter_by(id=bot_id, owner_id=owner.id).first()
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    if bot.token_needs_update:
+        return RedirectResponse(
+            f"/bot-owner/bots/{bot.id}?step=1&token_update_required=1",
+            status_code=303,
+        )
+    start_verification_for_locale.delay(bot_id, locale)
+    return RedirectResponse(
+        f"/bot-owner/bots/{bot_id}?step=2&verification_started=1",
+        status_code=303,
+    )
 
 
 @app.post("/bot-owner/bots/{bot_id}/delete")
@@ -765,6 +813,9 @@ async def save_pricing(request: Request, bot_id: int, db: Session = Depends(get_
             status_code=303,
         )
     form = await request.form()
+    max_pushes_raw = form.get("max_pushes_per_user_per_day")
+    if not max_pushes_raw or int(max_pushes_raw) <= 0:
+        raise HTTPException(status_code=400, detail="Max pushes per user must be at least 1.")
     locale_inputs = [key for key in form.keys() if key.startswith("locale_")]
     enabled_locales = 0
     for locale_key in locale_inputs:
@@ -781,8 +832,38 @@ async def save_pricing(request: Request, bot_id: int, db: Session = Depends(get_
         pricing.cpm_cents = int(cpm_raw)
     if enabled_locales == 0:
         raise HTTPException(status_code=400, detail="At least one locale must be for sale")
+    bot.max_pushes_per_user_per_day = int(max_pushes_raw)
     db.commit()
-    return RedirectResponse(f"/bot-owner/bots/{bot_id}?step=4&pricing_saved=1", status_code=303)
+    return RedirectResponse(f"/bot-owner/bots/{bot_id}?step=3&pricing_saved=1", status_code=303)
+
+
+@app.get("/bot-owner/bots/{bot_id}/test-push", response_class=HTMLResponse)
+async def test_push_page(request: Request, bot_id: int, db: Session = Depends(get_db)):
+    email = require_login(request)
+    owner = db.query(BotOwner).filter_by(email=email).first()
+    if not owner:
+        owner = get_owner(db, email)
+    bot = (
+        db.query(Bot)
+        .filter(Bot.id == bot_id, Bot.owner_id == owner.id, Bot.deleted_at.is_(None))
+        .first()
+    )
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    context = build_wizard_context(db, bot, 4, request, owner=owner)
+    return templates.TemplateResponse("bot_wizard.html", context)
+
+
+@app.post("/bot-owner/bots/{bot_id}/finish")
+async def finish_bot_setup(request: Request, bot_id: int, db: Session = Depends(get_db)):
+    email = require_login(request)
+    owner = db.query(BotOwner).filter_by(email=email).first()
+    bot = db.query(Bot).filter_by(id=bot_id, owner_id=owner.id).first()
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    if request.session.get("last_test_success_bot_id") != bot.id:
+        raise HTTPException(status_code=400, detail="Send at least one successful test push first.")
+    return RedirectResponse("/bot-owner/bots", status_code=303)
 
 
 @app.post("/bot-owner/bots/{bot_id}/test-push")
@@ -817,9 +898,12 @@ async def test_push(
     raw_ids = re.split(r"[,\n\r]+", tg_ids)
     parsed_ids = [item.strip() for item in raw_ids if item.strip()]
     results = []
+    success_count = 0
+    fail_count = 0
     for raw_id in parsed_ids:
         if not raw_id.isdigit():
             results.append({"tg_id": raw_id, "status": "invalid", "detail": "Invalid tg_id"})
+            fail_count += 1
             continue
         tg_id_value = int(raw_id)
         audience = (
@@ -829,13 +913,19 @@ async def test_push(
         )
         if not audience:
             results.append({"tg_id": tg_id_value, "status": "not_verified", "detail": "User not verified"})
+            fail_count += 1
             continue
-        resp = requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            data={"chat_id": tg_id_value, "text": message, "parse_mode": "HTML"},
-            timeout=10,
-        )
-        data = resp.json()
+        try:
+            resp = requests.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                data={"chat_id": tg_id_value, "text": message, "parse_mode": "HTML"},
+                timeout=10,
+            )
+            data = resp.json()
+        except requests.RequestException:
+            results.append({"tg_id": tg_id_value, "status": "failed", "detail": "Network error"})
+            fail_count += 1
+            continue
         if not data.get("ok"):
             description = data.get("description", "Send failed")
             if "unauthorized" in description.lower():
@@ -848,6 +938,7 @@ async def test_push(
                         "detail": "Token expired. Please update it in Step 1.",
                     }
                 )
+                fail_count += 1
                 continue
             results.append(
                 {
@@ -856,7 +947,20 @@ async def test_push(
                     "detail": description,
                 }
             )
+            fail_count += 1
             continue
         results.append({"tg_id": tg_id_value, "status": "ok", "detail": "Sent"})
-    context = build_wizard_context(db, bot, 5, request, owner=owner, test_results=results)
+        success_count += 1
+    if success_count > 0:
+        request.session["last_test_success_bot_id"] = bot.id
+    summary = {"success": success_count, "failed": fail_count, "total": len(parsed_ids)}
+    context = build_wizard_context(
+        db,
+        bot,
+        4,
+        request,
+        owner=owner,
+        test_results=results,
+        test_summary=summary,
+    )
     return templates.TemplateResponse("bot_wizard.html", context)
