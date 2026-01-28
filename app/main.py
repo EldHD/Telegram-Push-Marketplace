@@ -337,23 +337,12 @@ async def bot_owner_bots(request: Request, db: Session = Depends(get_db)):
         .order_by(Bot.created_at.desc())
         .all()
     )
-    bot_statuses = {}
-    for bot in bots:
-        verification = db.query(BotVerification).filter_by(bot_id=bot.id).first()
-        has_audience = db.query(Audience).filter_by(bot_id=bot.id).first() is not None
-        priced = db.query(BotPricing).filter_by(bot_id=bot.id).first() is not None
-        bot_statuses[bot.id] = {
-            "uploaded": has_audience,
-            "verified": bool(verification and verification.status.value == "COMPLETED"),
-            "priced": priced,
-        }
     return templates.TemplateResponse(
         "bots_list.html",
         {
             "request": request,
             "bots": bots,
-        "bot_statuses": bot_statuses,
-    },
+        },
     )
 
 
