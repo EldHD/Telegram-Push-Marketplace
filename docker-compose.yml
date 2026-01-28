@@ -1,0 +1,49 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: telegram_push
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg2://postgres:postgres@db:5432/telegram_push
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      SESSION_SECRET: dev-secret
+      OAUTH_REDIRECT_URL: http://localhost:8000/auth/callback
+      FERNET_KEY: ${FERNET_KEY}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+    depends_on:
+      - db
+      - redis
+
+  worker:
+    build: .
+    command: ["celery", "-A", "app.celery_app", "worker", "-Q", "verification", "--loglevel=info"]
+    environment:
+      DATABASE_URL: postgresql+psycopg2://postgres:postgres@db:5432/telegram_push
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      FERNET_KEY: ${FERNET_KEY}
+    depends_on:
+      - db
+      - redis
+
+volumes:
+  postgres_data:
