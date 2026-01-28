@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="page-header">
+  <div>
+    <h1>Bots</h1>
+    <p class="muted">Connect and manage your Telegram bots.</p>
+  </div>
+  <a class="button" href="/bot-owner/bots/new">Add new bot</a>
+</section>
+
+<section class="card dark">
+  {% if bots %}
+    <div class="table">
+      <div class="table-row header">
+        <div>Bot</div>
+        <div>Audience total</div>
+        <div>Audience RU</div>
+        <div>Earned all-time</div>
+        <div>Created</div>
+        <div>Actions</div>
+      </div>
+      {% for bot in bots %}
+        <div class="table-row">
+          <div>
+            <strong>{{ bot.username }}</strong>
+            <div class="status-pill {% if bot.token_needs_update %}inactive{% else %}active{% endif %}">
+              <span class="dot"></span>
+              {% if bot.token_needs_update %}Inactive{% else %}Active{% endif %}
+            </div>
+          </div>
+          <div>{{ bot.audience_total }}</div>
+          <div>{{ bot.audience_ru }}</div>
+          <div>{{ '%.2f' | format(bot.earned_all_time / 100) }}</div>
+          <div>{{ bot.created_at.strftime('%Y-%m-%d') }}</div>
+          <div class="actions">
+            <a class="link" href="/bot-owner/bots/{{ bot.id }}">Edit</a>
+            <button class="link danger" data-delete-bot="{{ bot.id }}" type="button">Delete</button>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="empty-state">
+      <div class="empty-icon">+</div>
+      <h2>You haven't added any bots yet</h2>
+      <p class="muted">Connect your first Telegram bot to start monetizing push notifications.</p>
+      <a class="button" href="/bot-owner/bots/new">Add new bot</a>
+    </div>
+  {% endif %}
+</section>
+
+<div class="modal" id="delete-modal">
+  <div class="modal-card">
+    <h3>Delete bot?</h3>
+    <p class="muted">This will remove the bot from your dashboard. Data will be kept in the system.</p>
+    <form method="post" id="delete-form">
+      <div class="form-actions">
+        <button class="button secondary" type="button" data-modal-close>Cancel</button>
+        <button class="button danger" type="submit">Delete</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
