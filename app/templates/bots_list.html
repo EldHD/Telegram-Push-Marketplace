@@ -6,7 +6,7 @@
     <h1>Bots</h1>
     <p class="muted">Connect and manage your Telegram bots.</p>
   </div>
-  <a class="button" href="/bot-owner/bots/new">Add my bot</a>
+  <a class="button" href="/bot-owner/bots/new">Add new bot</a>
 </section>
 
 <section class="card dark">
@@ -24,12 +24,10 @@
         <div class="table-row">
           <div>
             <strong>{{ bot.username }}</strong>
-            {% if bot.token_needs_update %}
-              <div class="status-pill warning">
-                <span class="dot"></span>
-                Token update required
-              </div>
-            {% endif %}
+            <div class="status-pill {% if bot.token_needs_update %}inactive{% else %}active{% endif %}">
+              <span class="dot"></span>
+              {% if bot.token_needs_update %}Inactive{% else %}Active{% endif %}
+            </div>
           </div>
           <div>{{ bot.audience_total }}</div>
           <div>{{ bot.audience_ru }}</div>
@@ -44,8 +42,10 @@
     </div>
   {% else %}
     <div class="empty-state">
-      <p>No bots yet.</p>
-      <a class="button" href="/bot-owner/bots/new">Add my bot</a>
+      <div class="empty-icon">+</div>
+      <h2>You haven't added any bots yet</h2>
+      <p class="muted">Connect your first Telegram bot to start monetizing push notifications.</p>
+      <a class="button" href="/bot-owner/bots/new">Add new bot</a>
     </div>
   {% endif %}
 </section>

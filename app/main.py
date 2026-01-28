@@ -344,10 +344,6 @@ def build_wizard_context(
         "errors": errors,
         "test_results": test_results or [],
         "test_summary": test_summary or {},
-        "can_finish": bool(
-            bot
-            and request.session.get("last_test_success_bot_id") == bot.id
-        ),
     }
 
 
@@ -861,8 +857,6 @@ async def finish_bot_setup(request: Request, bot_id: int, db: Session = Depends(
     bot = db.query(Bot).filter_by(id=bot_id, owner_id=owner.id).first()
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
-    if request.session.get("last_test_success_bot_id") != bot.id:
-        raise HTTPException(status_code=400, detail="Send at least one successful test push first.")
     return RedirectResponse("/bot-owner/bots", status_code=303)
 
 
