@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="card">
+  <h1>Bot Owner Portal</h1>
+  <p class="muted">Log in with your Gmail account to manage your Telegram bots.</p>
+  {% if google_enabled %}
+    <a class="button" href="/auth/google">Continue with Google</a>
+  {% else %}
+    <div class="alert">Google OAuth is not configured. Update your environment variables.</div>
+  {% endif %}
+</section>
+{% endblock %}
