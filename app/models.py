@@ -40,6 +40,7 @@ class Bot(Base):
     audience_total = Column(Integer, nullable=False, default=0)
     audience_ru = Column(Integer, nullable=False, default=0)
     earned_all_time = Column(Integer, nullable=False, default=0)
+    token_needs_update = Column(Boolean, nullable=False, default=False)
     deleted_at = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

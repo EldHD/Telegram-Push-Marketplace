@@ -113,6 +113,7 @@ def apply_bot_save(
         existing.owner_id = owner.id
         existing.token_encrypted = encrypted_token
         existing.max_pushes_per_user_per_day = max_pushes_per_user_per_day
+        existing.token_needs_update = False
         db.commit()
         return "transferred", existing
     bot = Bot(
@@ -123,6 +124,7 @@ def apply_bot_save(
         audience_total=0,
         audience_ru=0,
         earned_all_time=0,
+        token_needs_update=False,
     )
     db.add(bot)
     db.commit()
@@ -250,6 +252,79 @@ def allowed_html(value: str) -> bool:
     return all(tag in allowed_tags for tag in tags)
 
 
+def _pricing_locales(locale_counts: List[Tuple[str, int]]) -> List[Dict[str, int]]:
+    if not locale_counts:
+        return []
+    primary = [{"locale": locale, "total": total} for locale, total in locale_counts if total >= 1000]
+    if primary:
+        return primary
+    top_locale, top_total = max(locale_counts, key=lambda row: row[1])
+    return [{"locale": top_locale, "total": top_total}]
+
+
+def build_wizard_context(
+    db: Session,
+    bot: Bot | None,
+    step: int,
+    request: Request,
+    owner: BotOwner | None = None,
+    errors: Dict | None = None,
+    test_results: List[Dict] | None = None,
+) -> Dict:
+    verification = None
+    pricing_rows = []
+    locale_summary = []
+    other_locales = None
+    locale_counts = []
+    pricing_locales = []
+    if bot:
+        verification = db.query(BotVerification).filter_by(bot_id=bot.id).first()
+        pricing_rows = db.query(BotPricing).filter_by(bot_id=bot.id).all()
+        locale_summary = db.execute(
+            text(
+                """
+            SELECT locale,
+                   COUNT(*) as total,
+                   SUM(CASE WHEN verification_status = 'OK' THEN 1 ELSE 0 END) as ok,
+                   SUM(CASE WHEN verification_status = 'NOT_STARTED' THEN 1 ELSE 0 END) as not_started,
+                   SUM(CASE WHEN verification_status = 'BLOCKED' THEN 1 ELSE 0 END) as blocked
+            FROM audience
+            WHERE bot_id = :bot_id
+            GROUP BY locale
+                """
+            ),
+            {"bot_id": bot.id},
+        ).fetchall()
+        locale_summary, other_locales = compute_locale_summary(locale_summary)
+        locale_counts = db.execute(
+            text(
+                """
+            SELECT locale, COUNT(*) as total
+            FROM audience
+            WHERE bot_id = :bot_id
+            GROUP BY locale
+            ORDER BY total DESC
+                """
+            ),
+            {"bot_id": bot.id},
+        ).fetchall()
+        pricing_locales = _pricing_locales(locale_counts)
+    return {
+        "request": request,
+        "owner": owner,
+        "bot": bot,
+        "verification": verification,
+        "locale_summary": locale_summary,
+        "other_locales": other_locales,
+        "locale_counts": locale_counts,
+        "pricing_rows": pricing_rows,
+        "pricing_locales": pricing_locales,
+        "step": step,
+        "errors": errors,
+        "test_results": test_results or [],
+    }
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     if request.session.get("user"):
@@ -348,15 +423,12 @@ async def bot_owner_bots(request: Request, db: Session = Depends(get_db)):
 
 @app.get("/bot-owner/bots/new", response_class=HTMLResponse)
 async def bot_owner_new(request: Request, db: Session = Depends(get_db)):
-    require_login(request)
-    return templates.TemplateResponse(
-        "bot_wizard.html",
-        {
-            "request": request,
-            "bot": None,
-            "step": 1,
-        },
-    )
+    email = require_login(request)
+    owner = db.query(BotOwner).filter_by(email=email).first()
+    if not owner:
+        owner = get_owner(db, email)
+    context = build_wizard_context(db, None, 1, request, owner=owner)
+    return templates.TemplateResponse("bot_wizard.html", context)
 
 
 @app.get("/bot-owner/bots/{bot_id}", response_class=HTMLResponse)
@@ -372,53 +444,14 @@ async def bot_owner_wizard(request: Request, bot_id: int, db: Session = Depends(
     )
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
-    verification = db.query(BotVerification).filter_by(bot_id=bot.id).first()
-    pricing_rows = db.query(BotPricing).filter_by(bot_id=bot.id).all()
-    locale_summary = []
-    other_locales = None
-    locale_counts = []
-    if bot:
-        locale_summary = db.execute(
-            text(
-                """
-            SELECT locale,
-                   COUNT(*) as total,
-                   SUM(CASE WHEN verification_status = 'OK' THEN 1 ELSE 0 END) as ok,
-                   SUM(CASE WHEN verification_status = 'NOT_STARTED' THEN 1 ELSE 0 END) as not_started,
-                   SUM(CASE WHEN verification_status = 'BLOCKED' THEN 1 ELSE 0 END) as blocked
-            FROM audience
-            WHERE bot_id = :bot_id
-            GROUP BY locale
-                """
-            ),
-            {"bot_id": bot.id},
-        ).fetchall()
-        locale_summary, other_locales = compute_locale_summary(locale_summary)
-        locale_counts = db.execute(
-            text(
-                """
-            SELECT locale, COUNT(*) as total
-            FROM audience
-            WHERE bot_id = :bot_id
-            GROUP BY locale
-            ORDER BY total DESC
-                """
-            ),
-            {"bot_id": bot.id},
-        ).fetchall()
-    return templates.TemplateResponse(
-        "bot_wizard.html",
-        {
-            "request": request,
-            "bot": bot,
-            "verification": verification,
-            "locale_summary": locale_summary,
-            "other_locales": other_locales,
-            "locale_counts": locale_counts,
-            "pricing_rows": pricing_rows,
-            "step": int(request.query_params.get("step", 1)),
-        },
-    )
+    step = int(request.query_params.get("step", 1))
+    if bot.token_needs_update and step > 1:
+        return RedirectResponse(
+            f"/bot-owner/bots/{bot.id}?step=1&token_update_required=1",
+            status_code=303,
+        )
+    context = build_wizard_context(db, bot, step, request, owner=owner)
+    return templates.TemplateResponse("bot_wizard.html", context)
 
 
 @app.get("/bot-owner/bots/list", response_class=HTMLResponse)
@@ -443,17 +476,8 @@ async def create_bot(
     if max_pushes_per_user_per_day < 1:
         errors["max_pushes_per_user_per_day"] = "Max pushes per user must be at least 1."
     if errors:
-        return templates.TemplateResponse(
-            "bot_wizard.html",
-            {
-                "request": request,
-                "owner": owner,
-                "bot": None,
-                "errors": errors,
-                "step": 1,
-            },
-            status_code=400,
-        )
+        context = build_wizard_context(db, None, 1, request, owner=owner, errors=errors)
+        return templates.TemplateResponse("bot_wizard.html", context, status_code=400)
     normalized_username = f"@{_normalize_username(username)}"
     validation = validate_telegram_token(username, token)
     if token_validated.lower() != "true":
@@ -465,17 +489,8 @@ async def create_bot(
         else:
             errors["token"] = "Invalid Telegram token"
     if errors:
-        return templates.TemplateResponse(
-            "bot_wizard.html",
-            {
-                "request": request,
-                "owner": owner,
-                "bot": None,
-                "errors": errors,
-                "step": 1,
-            },
-            status_code=400,
-        )
+        context = build_wizard_context(db, None, 1, request, owner=owner, errors=errors)
+        return templates.TemplateResponse("bot_wizard.html", context, status_code=400)
     try:
         encrypted_token = encrypt_token(token)
     except RuntimeError:
@@ -499,18 +514,51 @@ async def create_bot(
         )
     if status == "duplicate":
         errors["username"] = "This bot is already connected to your account."
-        return templates.TemplateResponse(
-            "bot_wizard.html",
-            {
-                "request": request,
-                "owner": owner,
-                "bot": None,
-                "errors": errors,
-                "step": 1,
-            },
-            status_code=409,
-        )
+        context = build_wizard_context(db, None, 1, request, owner=owner, errors=errors)
+        return templates.TemplateResponse("bot_wizard.html", context, status_code=409)
     return RedirectResponse(f"/bot-owner/bots/{bot.id}?step=2", status_code=303)
+
+
+@app.post("/bot-owner/bots/{bot_id}/token")
+async def update_bot_token(
+    request: Request,
+    bot_id: int,
+    db: Session = Depends(get_db),
+    token: str = Form(...),
+    token_validated: str = Form("false"),
+):
+    email = require_login(request)
+    owner = db.query(BotOwner).filter_by(email=email).first()
+    if not owner:
+        owner = get_owner(db, email)
+    bot = (
+        db.query(Bot)
+        .filter(Bot.id == bot_id, Bot.owner_id == owner.id, Bot.deleted_at.is_(None))
+        .first()
+    )
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    errors = {}
+    validation = validate_telegram_token(bot.username, token)
+    if token_validated.lower() != "true":
+        errors["token"] = "Please validate the token before saving."
+    elif not validation.get("ok"):
+        if validation.get("reason") == "username_mismatch":
+            actual = validation.get("actual_username", "unknown")
+            errors["token"] = f"Token belongs to @{actual}, not {bot.username}"
+        else:
+            errors["token"] = "Invalid Telegram token"
+    if errors:
+        context = build_wizard_context(db, bot, 1, request, owner=owner, errors=errors)
+        return templates.TemplateResponse("bot_wizard.html", context, status_code=400)
+    try:
+        encrypted_token = encrypt_token(token)
+    except RuntimeError:
+        raise HTTPException(status_code=500, detail="Encryption configuration error")
+    bot.token_encrypted = encrypted_token
+    bot.token_needs_update = False
+    db.commit()
+    return RedirectResponse(f"/bot-owner/bots/{bot.id}?step=2&token_updated=1", status_code=303)
 
 
 @app.post("/bot-owner/bots/{bot_id}/upload")
@@ -529,6 +577,11 @@ async def upload_audience(
     )
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
+    if bot.token_needs_update:
+        return RedirectResponse(
+            f"/bot-owner/bots/{bot.id}?step=1&token_update_required=1",
+            status_code=303,
+        )
 
     content = await file.read()
     accepted_rows, errors = parse_audience_rows(content)
@@ -607,6 +660,8 @@ async def verification_status(request: Request, bot_id: int, db: Session = Depen
     bot = db.query(Bot).filter_by(id=bot_id, owner_id=owner.id).first()
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
+    if bot.token_needs_update:
+        return {"status": "TOKEN_UPDATE_REQUIRED"}
     verification = db.query(BotVerification).filter_by(bot_id=bot_id).first()
     if not verification:
         return {"status": "NONE"}
@@ -656,6 +711,11 @@ async def start_verification_job(request: Request, bot_id: int, db: Session = De
     bot = db.query(Bot).filter_by(id=bot_id, owner_id=owner.id).first()
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
+    if bot.token_needs_update:
+        return RedirectResponse(
+            f"/bot-owner/bots/{bot.id}?step=1&token_update_required=1",
+            status_code=303,
+        )
     total_users = db.query(Audience).filter_by(bot_id=bot_id).count()
     eta_seconds = int(total_users / 15) if total_users else 0
     verification = db.query(BotVerification).filter_by(bot_id=bot_id).first()
@@ -699,6 +759,11 @@ async def save_pricing(request: Request, bot_id: int, db: Session = Depends(get_
     bot = db.query(Bot).filter_by(id=bot_id, owner_id=owner.id).first()
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
+    if bot.token_needs_update:
+        return RedirectResponse(
+            f"/bot-owner/bots/{bot.id}?step=1&token_update_required=1",
+            status_code=303,
+        )
     form = await request.form()
     locale_inputs = [key for key in form.keys() if key.startswith("locale_")]
     enabled_locales = 0
@@ -725,7 +790,7 @@ async def test_push(
     request: Request,
     bot_id: int,
     db: Session = Depends(get_db),
-    tg_id: int = Form(...),
+    tg_ids: str = Form(...),
     message: str = Form(...),
 ):
     email = require_login(request)
@@ -733,6 +798,11 @@ async def test_push(
     bot = db.query(Bot).filter_by(id=bot_id, owner_id=owner.id).first()
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
+    if bot.token_needs_update:
+        return RedirectResponse(
+            f"/bot-owner/bots/{bot.id}?step=1&token_update_required=1",
+            status_code=303,
+        )
     if not allowed_html(message):
         raise HTTPException(status_code=400, detail="Message contains unsupported HTML tags")
     last_sent = request.session.get("last_test_push")
@@ -740,23 +810,53 @@ async def test_push(
     if last_sent and now - last_sent < TEST_PUSH_RATE_LIMIT_SECONDS:
         raise HTTPException(status_code=429, detail="Please wait before sending another test")
     request.session["last_test_push"] = now
-    audience = (
-        db.query(Audience)
-        .filter_by(bot_id=bot_id, tg_id=tg_id, verification_status=VerificationStatus.OK)
-        .first()
-    )
-    if not audience:
-        raise HTTPException(status_code=400, detail="tg_id is not verified for this bot")
     try:
         token = decrypt_token(bot.token_encrypted)
     except RuntimeError:
         raise HTTPException(status_code=500, detail="Encryption configuration error")
-    resp = requests.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        data={"chat_id": tg_id, "text": message, "parse_mode": "HTML"},
-        timeout=10,
-    )
-    data = resp.json()
-    if not data.get("ok"):
-        raise HTTPException(status_code=400, detail=data.get("description", "Send failed"))
-    return RedirectResponse(f"/bot-owner/bots/{bot_id}?step=4&test_sent=1", status_code=303)
+    raw_ids = re.split(r"[,\n\r]+", tg_ids)
+    parsed_ids = [item.strip() for item in raw_ids if item.strip()]
+    results = []
+    for raw_id in parsed_ids:
+        if not raw_id.isdigit():
+            results.append({"tg_id": raw_id, "status": "invalid", "detail": "Invalid tg_id"})
+            continue
+        tg_id_value = int(raw_id)
+        audience = (
+            db.query(Audience)
+            .filter_by(bot_id=bot_id, tg_id=tg_id_value, verification_status=VerificationStatus.OK)
+            .first()
+        )
+        if not audience:
+            results.append({"tg_id": tg_id_value, "status": "not_verified", "detail": "User not verified"})
+            continue
+        resp = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data={"chat_id": tg_id_value, "text": message, "parse_mode": "HTML"},
+            timeout=10,
+        )
+        data = resp.json()
+        if not data.get("ok"):
+            description = data.get("description", "Send failed")
+            if "unauthorized" in description.lower():
+                bot.token_needs_update = True
+                db.commit()
+                results.append(
+                    {
+                        "tg_id": tg_id_value,
+                        "status": "failed",
+                        "detail": "Token expired. Please update it in Step 1.",
+                    }
+                )
+                continue
+            results.append(
+                {
+                    "tg_id": tg_id_value,
+                    "status": "failed",
+                    "detail": description,
+                }
+            )
+            continue
+        results.append({"tg_id": tg_id_value, "status": "ok", "detail": "Sent"})
+    context = build_wizard_context(db, bot, 5, request, owner=owner, test_results=results)
+    return templates.TemplateResponse("bot_wizard.html", context)

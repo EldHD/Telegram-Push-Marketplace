@@ -22,7 +22,15 @@
       </div>
       {% for bot in bots %}
         <div class="table-row">
-          <div><strong>{{ bot.username }}</strong></div>
+          <div>
+            <strong>{{ bot.username }}</strong>
+            {% if bot.token_needs_update %}
+              <div class="status-pill warning">
+                <span class="dot"></span>
+                Token update required
+              </div>
+            {% endif %}
+          </div>
           <div>{{ bot.audience_total }}</div>
           <div>{{ bot.audience_ru }}</div>
           <div>{{ '%.2f' | format(bot.earned_all_time / 100) }}</div>

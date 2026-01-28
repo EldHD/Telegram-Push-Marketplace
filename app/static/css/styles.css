@@ -277,13 +277,24 @@ table th, table td {
   display: block;
 }
 
+.wizard-header {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
 .wizard-progress {
   display: flex;
   gap: 12px;
   margin-top: 16px;
+  flex-wrap: wrap;
 }
 
 .wizard-progress .step {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
   padding: 6px 12px;
   border-radius: 999px;
   border: 1px solid var(--border);
@@ -294,6 +305,11 @@ table th, table td {
 .wizard-progress .step.active {
   color: var(--text);
   border-color: var(--primary);
+}
+
+.wizard-progress .step.locked {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .bot-table {
@@ -393,6 +409,8 @@ table th, table td {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  font-size: 12px;
+  margin-top: 6px;
 }
 
 .status-pill .dot {
@@ -404,6 +422,37 @@ table th, table td {
 
 .status-pill .dot.ok {
   background: #4ade80;
+}
+
+.status-pill.warning {
+  color: #fbbf24;
+}
+
+.results-list {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 0;
+  display: grid;
+  gap: 8px;
+}
+
+.result {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #0f1418;
+  border: 1px solid #1f2a33;
+}
+
+.result.ok {
+  border-color: #1c3b2a;
+  color: #a7f3d0;
+}
+
+.result.failed,
+.result.invalid,
+.result.not_verified {
+  border-color: #3b1f1f;
+  color: #fca5a5;
 }
 
 .locale-grid {

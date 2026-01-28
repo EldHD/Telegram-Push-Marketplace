@@ -62,9 +62,13 @@ function initBotTokenValidation() {
   const saveButton = document.getElementById('save-bot-button');
   const validateButton = document.getElementById('validate-bot-token');
   const status = document.getElementById('token-validation-status');
-  const form = document.querySelector('form[action=\"/bot-owner/bots\"]');
+  const form = document.querySelector('[data-token-form]');
   const validatedField = document.getElementById('token-validated');
   if (!usernameInput || !tokenInput || !saveButton || !validateButton || !status || !form) {
+    return;
+  }
+  const requiresValidation = form.getAttribute('data-token-validation') === 'true';
+  if (!requiresValidation) {
     return;
   }
 

@@ -7,49 +7,94 @@
     <p class="muted">Complete all steps to activate your bot.</p>
   </div>
   <div class="wizard-progress">
-    <div class="step {% if step >= 1 %}active{% endif %}">1. Connect</div>
-    <div class="step {% if step >= 2 %}active{% endif %}">2. Audience</div>
-    <div class="step {% if step >= 3 %}active{% endif %}">3. Verify</div>
-    <div class="step {% if step >= 4 %}active{% endif %}">4. Pricing</div>
+    {% set can_navigate = bot and not bot.token_needs_update %}
+    {% set steps = [
+      {"id": 1, "label": "Connect"},
+      {"id": 2, "label": "Audience"},
+      {"id": 3, "label": "Verify"},
+      {"id": 4, "label": "Pricing"},
+      {"id": 5, "label": "Test"} if bot else None
+    ] %}
+    {% for step_item in steps if step_item %}
+      {% if can_navigate %}
+        <a class="step {% if step >= step_item.id %}active{% endif %}" href="/bot-owner/bots/{{ bot.id }}?step={{ step_item.id }}">
+          {{ step_item.id }}. {{ step_item.label }}
+        </a>
+      {% else %}
+        <div class="step {% if step >= step_item.id %}active{% endif %} {% if bot and step_item.id > 1 %}locked{% endif %}">
+          {{ step_item.id }}. {{ step_item.label }}
+        </div>
+      {% endif %}
+    {% endfor %}
   </div>
+  {% if bot and bot.token_needs_update %}
+    <div class="alert">
+      Token has changed. Please update it to unlock the remaining steps.
+    </div>
+  {% endif %}
 </section>
 
 <div class="wizard" data-current-step="{{ step }}">
   <div class="wizard-step" data-step="1">
     <section class="card dark">
       <h2>Step 1 — Connect Bot</h2>
-      <form method="post" action="/bot-owner/bots" class="form-grid">
-        <label>
-          Bot username <span class="required">*</span>
-          <input type="text" name="username" id="bot-username" placeholder="@mycoolbot" required>
-          <small class="helper">Use the bot username in Telegram. Must end with “bot”.</small>
-          {% if errors and errors.get('username') %}
-            <span class="error">{{ errors.get('username') }}</span>
-          {% endif %}
-        </label>
-        <label>
-          Bot token <span class="required">*</span>
-          <input type="password" name="token" id="bot-token" placeholder="123456:ABC..." required>
-          <small class="helper">We validate the token using Telegram getMe.</small>
-          <div class="validation-status" id="token-validation-status"></div>
-          {% if errors and errors.get('token') %}
-            <span class="error">{{ errors.get('token') }}</span>
-          {% endif %}
-        </label>
-        <label>
-          Max pushes per user per day <span class="required">*</span>
-          <input type="number" name="max_pushes_per_user_per_day" min="1" value="1" required>
-          <small class="helper">Protects your audience from spam.</small>
-          {% if errors and errors.get('max_pushes_per_user_per_day') %}
-            <span class="error">{{ errors.get('max_pushes_per_user_per_day') }}</span>
-          {% endif %}
-        </label>
-        <input type="hidden" name="token_validated" id="token-validated" value="false">
-        <div class="form-actions">
-          <button class="button secondary" type="button" id="validate-bot-token">Validate token</button>
-          <button class="button" type="submit" id="save-bot-button" disabled>Save bot</button>
-        </div>
-      </form>
+      {% if bot %}
+        <form method="post" action="/bot-owner/bots/{{ bot.id }}/token" class="form-grid" data-token-form data-token-validation="{{ 'true' if bot.token_needs_update else 'false' }}">
+          <input type="hidden" id="bot-username" value="{{ bot.username }}">
+          <label>
+            Bot username
+            <input type="text" value="{{ bot.username }}" disabled>
+            <small class="helper">Username cannot be edited after creation.</small>
+          </label>
+          <label>
+            Bot token {% if bot.token_needs_update %}<span class="required">*</span>{% endif %}
+            <input type="password" name="token" id="bot-token" placeholder="123456:ABC..." {% if not bot.token_needs_update %}disabled{% endif %} {% if bot.token_needs_update %}required{% endif %}>
+            <small class="helper">Update the token if it was regenerated in BotFather.</small>
+            <div class="validation-status" id="token-validation-status"></div>
+            {% if errors and errors.get('token') %}
+              <span class="error">{{ errors.get('token') }}</span>
+            {% endif %}
+          </label>
+          <input type="hidden" name="token_validated" id="token-validated" value="false">
+          <div class="form-actions">
+            <button class="button secondary" type="button" id="validate-bot-token" {% if not bot.token_needs_update %}disabled{% endif %}>Validate token</button>
+            <button class="button" type="submit" id="save-bot-button" {% if not bot.token_needs_update %}disabled{% endif %}>Update token</button>
+          </div>
+        </form>
+      {% else %}
+        <form method="post" action="/bot-owner/bots" class="form-grid" data-token-form data-token-validation="true">
+          <label>
+            Bot username <span class="required">*</span>
+            <input type="text" name="username" id="bot-username" placeholder="@mycoolbot" required>
+            <small class="helper">Use the bot username in Telegram. Must end with “bot”.</small>
+            {% if errors and errors.get('username') %}
+              <span class="error">{{ errors.get('username') }}</span>
+            {% endif %}
+          </label>
+          <label>
+            Bot token <span class="required">*</span>
+            <input type="password" name="token" id="bot-token" placeholder="123456:ABC..." required>
+            <small class="helper">We validate the token using Telegram getMe.</small>
+            <div class="validation-status" id="token-validation-status"></div>
+            {% if errors and errors.get('token') %}
+              <span class="error">{{ errors.get('token') }}</span>
+            {% endif %}
+          </label>
+          <label>
+            Max pushes per user per day <span class="required">*</span>
+            <input type="number" name="max_pushes_per_user_per_day" min="1" value="1" required>
+            <small class="helper">Protects your audience from spam.</small>
+            {% if errors and errors.get('max_pushes_per_user_per_day') %}
+              <span class="error">{{ errors.get('max_pushes_per_user_per_day') }}</span>
+            {% endif %}
+          </label>
+          <input type="hidden" name="token_validated" id="token-validated" value="false">
+          <div class="form-actions">
+            <button class="button secondary" type="button" id="validate-bot-token">Validate token</button>
+            <button class="button" type="submit" id="save-bot-button" disabled>Save &amp; continue</button>
+          </div>
+        </form>
+      {% endif %}
     </section>
   </div>
 
@@ -61,7 +106,7 @@
         <input type="file" name="file" accept=".csv" required>
         <small class="helper">Supports comma, semicolon, or tab-separated files.</small>
         <div class="form-actions">
-          <button class="button" type="submit">Upload</button>
+          <button class="button" type="submit">Upload &amp; continue</button>
         </div>
       </form>
       {% if request.query_params.get('uploaded') %}
@@ -138,7 +183,7 @@
             </tr>
           </thead>
           <tbody>
-            {% for locale in locale_summary %}
+            {% for locale in pricing_locales %}
               {% set existing = (pricing_rows | selectattr('locale', 'equalto', locale.locale) | list) %}
               {% set row = existing[0] if existing else None %}
               <tr>
@@ -154,9 +199,43 @@
           </tbody>
         </table>
         <div class="form-actions">
-          <button class="button" type="submit">Save pricing</button>
+          <button class="button" type="submit">Finish</button>
         </div>
       </form>
+    </section>
+  </div>
+
+  <div class="wizard-step" data-step="5">
+    <section class="card dark">
+      <h2>Step 5 — Test Push</h2>
+      <p class="muted">Send a test push to one or more Telegram IDs (comma or newline separated).</p>
+      <form method="post" action="/bot-owner/bots/{{ bot.id }}/test-push" class="form-grid">
+        <label>
+          Telegram IDs
+          <textarea name="tg_ids" rows="3" placeholder="123456789\n987654321" required></textarea>
+          <small class="helper">Test messages can be delivered only to users who have already started the bot.</small>
+        </label>
+        <label>
+          Message (HTML)
+          <textarea name="message" rows="4" placeholder="Hello! <b>Test</b>" required></textarea>
+          <small class="helper">Allowed tags: &lt;b&gt; &lt;i&gt; &lt;u&gt; &lt;s&gt; &lt;a&gt; &lt;code&gt; &lt;pre&gt;.</small>
+        </label>
+        <div class="form-actions">
+          <button class="button" type="submit">Send test push</button>
+        </div>
+      </form>
+      {% if test_results %}
+        <div class="card dark">
+          <h3>Results</h3>
+          <ul class="results-list">
+            {% for result in test_results %}
+              <li class="result {{ result.status }}">
+                <strong>{{ result.tg_id }}</strong> — {{ result.detail }}
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
     </section>
   </div>
 </div>

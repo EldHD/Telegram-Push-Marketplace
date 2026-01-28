@@ -85,6 +85,10 @@ def ensure_bot_columns() -> None:
             conn.execute(text("ALTER TABLE bots ADD COLUMN IF NOT EXISTS audience_ru INTEGER DEFAULT 0"))
         if "earned_all_time" not in columns:
             conn.execute(text("ALTER TABLE bots ADD COLUMN IF NOT EXISTS earned_all_time INTEGER DEFAULT 0"))
+        if "token_needs_update" not in columns:
+            conn.execute(
+                text("ALTER TABLE bots ADD COLUMN IF NOT EXISTS token_needs_update BOOLEAN DEFAULT FALSE")
+            )
         if "deleted_at" not in columns:
             conn.execute(text("ALTER TABLE bots ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP"))
         if "updated_at" not in columns:
