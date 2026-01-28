@@ -21,10 +21,10 @@
       <div class="stepper-step {% if step > step_item.id %}complete{% elif step == step_item.id %}active{% endif %}">
         <div class="stepper-circle">{% if step > step_item.id %}✓{% else %}{{ step_item.id }}{% endif %}</div>
         <div class="stepper-label">{{ step_item.label }}</div>
-        {% if not loop.last %}
-          <div class="stepper-line"></div>
-        {% endif %}
       </div>
+      {% if not loop.last %}
+        <div class="stepper-line {% if step > step_item.id %}complete{% endif %}"></div>
+      {% endif %}
     {% endfor %}
   </div>
   {% if bot and bot.token_needs_update %}
@@ -68,13 +68,13 @@
             {% endif %}
           </label>
           <input type="hidden" name="token_validated" id="token-validated" value="false">
-          <div class="form-actions">
+          <div class="form-actions form-actions-row">
             <button class="button secondary" type="button" id="validate-bot-token" {% if not bot.token_needs_update %}disabled{% endif %}>Validate token</button>
-            <button class="button" type="submit" id="save-bot-button" {% if not bot.token_needs_update %}disabled{% endif %}>Update token</button>
+            <button class="button" type="submit" id="save-bot-button" {% if not bot.token_needs_update %}disabled{% endif %}>Next</button>
           </div>
         </form>
         <div class="form-actions">
-          <a class="button secondary" href="/bot-owner/bots">Back</a>
+          <a class="link subtle" href="/bot-owner/bots">Back</a>
           {% if not bot.token_needs_update %}
             <a class="button" href="/bot-owner/bots/{{ bot.id }}?step=2">Next</a>
           {% else %}
@@ -101,13 +101,13 @@
             {% endif %}
           </label>
           <input type="hidden" name="token_validated" id="token-validated" value="false">
-          <div class="form-actions">
+          <div class="form-actions form-actions-row">
             <button class="button secondary" type="button" id="validate-bot-token">Validate token</button>
             <button class="button" type="submit" id="save-bot-button" disabled>Next</button>
           </div>
         </form>
         <div class="form-actions">
-          <a class="button secondary" href="/bot-owner/bots">Back</a>
+          <a class="link subtle" href="/bot-owner/bots">Back</a>
         </div>
       {% endif %}
     </section>
@@ -203,7 +203,7 @@
         <div class="locale-status" id="locale-status-list"></div>
       {% endif %}
       <div class="form-actions">
-        <a class="button secondary" href="/bot-owner/bots/{{ bot.id }}?step=1">Back</a>
+        <a class="link subtle" href="/bot-owner/bots/{{ bot.id }}?step=1">Back</a>
         {% if bot and bot.audience_total > 0 %}
           <a class="button" href="/bot-owner/bots/{{ bot.id }}?step=3">Next</a>
         {% else %}
@@ -253,7 +253,7 @@
         </div>
       </form>
       <div class="form-actions">
-        <a class="button secondary" href="/bot-owner/bots/{{ bot.id }}?step=2">Back</a>
+        <a class="link subtle" href="/bot-owner/bots/{{ bot.id }}?step=2">Back</a>
         <a class="button" href="/bot-owner/bots/{{ bot.id }}?step=4">Next</a>
       </div>
     </section>
@@ -297,7 +297,7 @@
         </div>
       {% endif %}
       <div class="form-actions">
-        <a class="button secondary" href="/bot-owner/bots/{{ bot.id }}?step=3">Back</a>
+        <a class="link subtle" href="/bot-owner/bots/{{ bot.id }}?step=3">Back</a>
         <form method="post" action="/bot-owner/bots/{{ bot.id }}/finish">
           <button class="button" type="submit">Finish</button>
         </form>

@@ -144,6 +144,17 @@ input, textarea {
   border: 1px solid #1f2a3a;
 }
 
+.link.subtle {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.form-actions-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
 .form-actions {
   margin-top: 8px;
 }
@@ -312,7 +323,7 @@ table th, table td {
 .stepper {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
   flex-wrap: wrap;
   margin-top: 16px;
 }
@@ -321,6 +332,10 @@ table th, table td {
   display: flex;
   align-items: center;
   gap: 10px;
+  padding: 6px 14px;
+  border-radius: 16px;
+  background: #0f1520;
+  border: 1px solid #1e2a3a;
 }
 
 .stepper-circle {
@@ -334,7 +349,16 @@ table th, table td {
   font-weight: 600;
 }
 
-.stepper-step.active .stepper-circle,
+.stepper-step.active {
+  background: rgba(31, 94, 255, 0.2);
+  border-color: rgba(31, 94, 255, 0.4);
+}
+
+.stepper-step.active .stepper-circle {
+  background: #1f5eff;
+  color: #fff;
+}
+
 .stepper-step.complete .stepper-circle {
   background: #16a34a;
   color: #fff;
@@ -350,8 +374,7 @@ table th, table td {
   background: #1f2a3a;
 }
 
-.stepper-step.active .stepper-line,
-.stepper-step.complete .stepper-line {
+.stepper-line.complete {
   background: #16a34a;
 }
 
